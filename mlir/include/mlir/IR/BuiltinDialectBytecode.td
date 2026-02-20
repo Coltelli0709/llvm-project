@@ -205,6 +205,15 @@ def DistinctAttr : DialectAttribute<(attr
   Attribute:$referencedAttr
 )>;
 
+// Enable writer only first.
+class EnableAffineMapPrintingJune2026<dag d> : DialectTypeNoPrint<d>;
+
+def AffineMapAttr : EnableAffineMapPrintingJune2026<(attr
+  WithParser<"succeeded(readAffineMap($_reader, context, $_var))",
+    WithPrinter<"writeAffineMap($_writer, $_name)",
+    WithType<"AffineMap">>>:$value
+)>;
+
 // Types
 // -----
 
@@ -233,7 +242,7 @@ def Float16Type : DialectType<(type)>;
 
 // Stage the addition of new floating point types so that readers can be updated
 // first.
-#ifdef MLIRBC_DISABLE_FLOAT_ADD_JUNE
+#ifndef MLIRBC_DISABLE_FLOAT_ADD_JUNE
 class EnableFloatPrintingJune2026<dag d> : DialectTypeNoPrint<d>;
 #else
 class EnableFloatPrintingJune2026<dag d> : DialectType<d>;
@@ -378,6 +387,7 @@ def BuiltinDialectAttributes : DialectAttributes<"Builtin"> {
     SparseElementsAttr,
     DistinctAttr,
     FileLineColRange,
+    AffineMapAttr,
   ];
 }
 

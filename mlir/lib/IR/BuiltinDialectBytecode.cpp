@@ -9,6 +9,8 @@
 #include "BuiltinDialectBytecode.h"
 #include "AttributeDetail.h"
 #include "mlir/Bytecode/BytecodeImplementation.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -33,9 +35,168 @@ namespace {
 
 // TODO: Move these to separate file.
 
-// Returns the bitwidth if known, else return std::nullopt.
-static std::optional<unsigned> getIntegerBitWidth(DialectBytecodeReader &reader,
-                                                  Type type) {
+//===----------------------------------------------------------------------===//
+// AffineExpr / AffineMap bytecode helpers
+//===----------------------------------------------------------------------===//
+
+// AffineExpr kind encoding:
+//
+//   0 = DimId
+//   1 = SymbolId
+//   2 = Constant
+//   3 = Add
+//   4 = Mul
+//   5 = Mod
+//   6 = FloorDiv
+//   7 = CeilDiv
+//
+// Extra kinds may be appended here but the existing ones and their
+// ordering should not be changed.
+
+static FailureOr<AffineExpr> readAffineExpr(DialectBytecodeReader &reader,
+                                             MLIRContext *context) {
+  uint64_t kind;
+  if (failed(reader.readVarInt(kind)))
+    return failure();
+
+  switch (kind) {
+  case 0: { // DimId
+    uint64_t position;
+    if (failed(reader.readVarInt(position)))
+      return failure();
+    return getAffineDimExpr(position, context);
+  }
+  case 1: { // SymbolId
+    uint64_t position;
+    if (failed(reader.readVarInt(position)))
+      return failure();
+    return getAffineSymbolExpr(position, context);
+  }
+  case 2: { // Constant
+    int64_t value;
+    if (failed(reader.readSignedVarInt(value)))
+      return failure();
+    return getAffineConstantExpr(value, context);
+  }
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7: { // Binary ops: Add, Mul, Mod, FloorDiv, CeilDiv
+    auto lhs = readAffineExpr(reader, context);
+    if (failed(lhs))
+      return failure();
+    auto rhs = readAffineExpr(reader, context);
+    if (failed(rhs))
+      return failure();
+    AffineExprKind exprKind;
+    switch (kind) {
+    case 3:
+      exprKind = AffineExprKind::Add;
+      break;
+    case 4:
+      exprKind = AffineExprKind::Mul;
+      break;
+    case 5:
+      exprKind = AffineExprKind::Mod;
+      break;
+    case 6:
+      exprKind = AffineExprKind::FloorDiv;
+      break;
+    case 7:
+      exprKind = AffineExprKind::CeilDiv;
+      break;
+    default:
+      llvm_unreachable("unhandled affine expr kind");
+    }
+    return getAffineBinaryOpExpr(exprKind, *lhs, *rhs);
+  }
+  default:
+    reader.emitError() << "unknown AffineExpr kind: " << kind;
+    return failure();
+  }
+}
+
+static void writeAffineExpr(DialectBytecodeWriter &writer, AffineExpr expr) {
+  switch (expr.getKind()) {
+  case AffineExprKind::DimId:
+    writer.writeVarInt(0);
+    writer.writeVarInt(cast<AffineDimExpr>(expr).getPosition());
+    break;
+  case AffineExprKind::SymbolId:
+    writer.writeVarInt(1);
+    writer.writeVarInt(cast<AffineSymbolExpr>(expr).getPosition());
+    break;
+  case AffineExprKind::Constant:
+    writer.writeVarInt(2);
+    writer.writeSignedVarInt(cast<AffineConstantExpr>(expr).getValue());
+    break;
+  case AffineExprKind::Add:
+    writer.writeVarInt(3);
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getLHS());
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getRHS());
+    break;
+  case AffineExprKind::Mul:
+    writer.writeVarInt(4);
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getLHS());
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getRHS());
+    break;
+  case AffineExprKind::Mod:
+    writer.writeVarInt(5);
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getLHS());
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getRHS());
+    break;
+  case AffineExprKind::FloorDiv:
+    writer.writeVarInt(6);
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getLHS());
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getRHS());
+    break;
+  case AffineExprKind::CeilDiv:
+    writer.writeVarInt(7);
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getLHS());
+    writeAffineExpr(writer, cast<AffineBinaryOpExpr>(expr).getRHS());
+    break;
+  }
+}
+
+static LogicalResult readAffineMap(DialectBytecodeReader &reader,
+                                   MLIRContext *context,
+                                   AffineMap &map) {
+  uint64_t numDims, numSymbols, numResults;
+  if (failed(reader.readVarInt(numDims)) ||
+      failed(reader.readVarInt(numSymbols)) ||
+      failed(reader.readVarInt(numResults)))
+    return failure();
+
+  SmallVector<AffineExpr> results;
+  results.reserve(numResults);
+  for (uint64_t i = 0; i < numResults; ++i) {
+    auto expr = readAffineExpr(reader, context);
+    if (failed(expr))
+      return failure();
+    results.push_back(*expr);
+  }
+  map = AffineMap::get(numDims, numSymbols, results, context);
+  return success();
+}
+
+static void writeAffineMap(DialectBytecodeWriter &writer,
+                           AffineMapAttr attr) {
+  AffineMap map = attr.getValue();
+  writer.writeVarInt(map.getNumDims());
+  writer.writeVarInt(map.getNumSymbols());
+  writer.writeVarInt(map.getNumResults());
+  for (AffineExpr expr : map.getResults())
+    writeAffineExpr(writer, expr);
+}
+
+//===----------------------------------------------------------------------===//
+// Utility functions
+//===----------------------------------------------------------------------===//
+
+// Returns the bitwidth if known, else return 0.
+static std::optional<unsigned> getIntegerBitWidth(
+    DialectBytecodeReader &reader, Type type) {
   if (auto intType = dyn_cast<IntegerType>(type))
     return intType.getWidth();
   if (llvm::isa<IndexType>(type))
