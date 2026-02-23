@@ -11,6 +11,7 @@
 #include "mlir/Bytecode/BytecodeImplementation.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -117,6 +118,16 @@ static FailureOr<AffineExpr> readAffineExpr(DialectBytecodeReader &reader,
   }
 }
 
+/// Overload that takes an output reference parameter, for use in list parsing.
+static LogicalResult readAffineExpr(DialectBytecodeReader &reader,
+                                    MLIRContext *context, AffineExpr &result) {
+  auto expr = readAffineExpr(reader, context);
+  if (failed(expr))
+    return failure();
+  result = *expr;
+  return success();
+}
+
 static void writeAffineExpr(DialectBytecodeWriter &writer, AffineExpr expr) {
   switch (expr.getKind()) {
   case AffineExprKind::DimId:
@@ -159,35 +170,20 @@ static void writeAffineExpr(DialectBytecodeWriter &writer, AffineExpr expr) {
   }
 }
 
-static LogicalResult readAffineMap(DialectBytecodeReader &reader,
-                                   MLIRContext *context,
-                                   AffineMap &map) {
-  uint64_t numDims, numSymbols, numResults;
-  if (failed(reader.readVarInt(numDims)) ||
-      failed(reader.readVarInt(numSymbols)) ||
-      failed(reader.readVarInt(numResults)))
-    return failure();
-
-  SmallVector<AffineExpr> results;
-  results.reserve(numResults);
-  for (uint64_t i = 0; i < numResults; ++i) {
-    auto expr = readAffineExpr(reader, context);
-    if (failed(expr))
-      return failure();
-    results.push_back(*expr);
-  }
-  map = AffineMap::get(numDims, numSymbols, results, context);
-  return success();
+static AffineMapAttr getAffineMapAttr(MLIRContext *context, uint64_t numDims,
+                                      uint64_t numSymbols,
+                                      ArrayRef<AffineExpr> results) {
+  return AffineMapAttr::get(
+      AffineMap::get(numDims, numSymbols, results, context));
 }
 
-static void writeAffineMap(DialectBytecodeWriter &writer,
-                           AffineMapAttr attr) {
-  AffineMap map = attr.getValue();
-  writer.writeVarInt(map.getNumDims());
-  writer.writeVarInt(map.getNumSymbols());
-  writer.writeVarInt(map.getNumResults());
-  for (AffineExpr expr : map.getResults())
-    writeAffineExpr(writer, expr);
+
+static IntegerSetAttr getIntegerSetAttr(MLIRContext *context, uint64_t numDims,
+                                        uint64_t numSymbols,
+                                        ArrayRef<AffineExpr> constraints,
+                                        ArrayRef<bool> eqFlags) {
+  return IntegerSetAttr::get(
+      IntegerSet::get(numDims, numSymbols, constraints, eqFlags));
 }
 
 //===----------------------------------------------------------------------===//

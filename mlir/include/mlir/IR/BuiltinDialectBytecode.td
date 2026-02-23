@@ -205,14 +205,52 @@ def DistinctAttr : DialectAttribute<(attr
   Attribute:$referencedAttr
 )>;
 
-// Enable writer only first.
+def AffineExpr :
+  WithParser<"succeeded(readAffineExpr($_reader, context, $_var))",
+  WithBuilder<"$_args",
+  WithPrinter<"writeAffineExpr($_writer, $_getter)",
+  WithType<"AffineExpr">>>>;
+def AffineExprList : List<AffineExpr>;
+
+def AffineMapResults : Array<AffineExprList> {
+  let cGetter = "$_attrType.getValue().getResults()";
+}
+
 class EnableAffineMapPrintingJune2026<dag d> : DialectTypeNoPrint<d>;
 
-def AffineMapAttr : EnableAffineMapPrintingJune2026<(attr
-  WithParser<"succeeded(readAffineMap($_reader, context, $_var))",
-    WithPrinter<"writeAffineMap($_writer, $_name)",
-    WithType<"AffineMap">>>:$value
-)>;
+def AffineMapAttr :  EnableAffineMapPrintingJune2026<(attr
+  // AffineMapAttr has everything going via AffineMap and getValue, so extra
+  // work needed here.
+  WithGetter<"$_attrType.getValue().getNumDims()", VarInt>:$numDims,
+  WithGetter<"$_attrType.getValue().getNumSymbols()", VarInt>:$numSymbols,
+  AffineMapResults:$results
+)> {
+  let cBuilder = "getAffineMapAttr(context, numDims, numSymbols, results)";
+}
+
+// Similar to AffineMapAttr, IntegerSetAttr has everything going via IntegerSet
+// and getValue, so extra indirections.
+def IntegerSetConstraints : Array<AffineExprList> {
+  let cGetter = "$_attrType.getValue().getConstraints()";
+}
+def IntegerSetEqFlags : ArrayWithKnownSize<BoolList, "constraints.size()"> {
+  let cGetter = "$_attrType.getValue().getEqFlags()";
+}
+
+#ifdef MLIRBC_DISABLE_INTEGERSET_ADD_JUNE
+class EnableIntegerSetPrintingJune2026<dag d> : DialectTypeNoPrint<d>;
+#else
+class EnableIntegerSetPrintingJune2026<dag d> : DialectType<d>;
+#endif
+
+def IntegerSetAttr : EnableIntegerSetPrintingJune2026<(attr
+  WithGetter<"$_attrType.getValue().getNumDims()", VarInt>:$numDims,
+  WithGetter<"$_attrType.getValue().getNumSymbols()", VarInt>:$numSymbols,
+  IntegerSetConstraints:$constraints,
+  IntegerSetEqFlags:$eqFlags
+)> {
+  let cBuilder = "getIntegerSetAttr(context, numDims, numSymbols, constraints, eqFlags)";
+}
 
 // Types
 // -----
@@ -388,6 +426,7 @@ def BuiltinDialectAttributes : DialectAttributes<"Builtin"> {
     DistinctAttr,
     FileLineColRange,
     AffineMapAttr,
+    IntegerSetAttr,
   ];
 }
 
