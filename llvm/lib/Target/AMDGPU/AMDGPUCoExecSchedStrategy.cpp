@@ -79,7 +79,7 @@ InstructionFlavor llvm::AMDGPU::classifyFlavor(const MachineInstr &MI,
   return InstructionFlavor::Other;
 }
 
-SUnit *HardwareUnitInfo::getNextTargetSU(bool LookDeep) {
+SUnit *HardwareUnitInfo::getNextTargetSU(bool LookDeep) const {
   for (auto *PrioritySU : PrioritySUs) {
     if (!PrioritySU->isTopReady())
       return PrioritySU;
@@ -129,7 +129,7 @@ void HardwareUnitInfo::insert(SUnit *SU, unsigned BlockingCycles) {
   PrioritySUs.insert(SU);
 }
 
-void HardwareUnitInfo::schedule(SUnit *SU, unsigned BlockingCycles) {
+void HardwareUnitInfo::markScheduled(SUnit *SU, unsigned BlockingCycles) {
   // We may want to ignore some HWUIs (e.g. InstructionFlavor::Other). To do so,
   // we just clear the HWUI. However, we still have instructions which map to
   // this HWUI. Don't bother managing the state for these HWUI.
@@ -188,7 +188,7 @@ unsigned CandidateHeuristics::getHWUICyclesForInst(SUnit *SU) {
   return ReleaseAtCycle;
 }
 
-void CandidateHeuristics::schedNode(SUnit *SU) {
+void CandidateHeuristics::updateForScheduling(SUnit *SU) {
   HardwareUnitInfo *HWUI =
       getHWUIFromFlavor(classifyFlavor(*SU->getInstr(), *SII));
   assert(HWUI);
@@ -273,7 +273,7 @@ bool CandidateHeuristics::tryCriticalResourceDependency(
     GenericSchedulerBase::SchedCandidate &Cand, SchedBoundary *Zone) const {
 
   auto HasPrioritySU = [this, &Cand, &TryCand](unsigned ResourceIdx) {
-    HardwareUnitInfo &HWUI = HWUInfo[ResourceIdx];
+    const HardwareUnitInfo &HWUI = HWUInfo[ResourceIdx];
 
     auto CandFlavor = classifyFlavor(*Cand.SU->getInstr(), *SII);
     auto TryCandFlavor = classifyFlavor(*TryCand.SU->getInstr(), *SII);

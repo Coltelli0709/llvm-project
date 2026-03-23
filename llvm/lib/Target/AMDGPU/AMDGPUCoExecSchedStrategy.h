@@ -225,7 +225,7 @@ public:
   /// which dependencies to schedule. LookDeep is useful if the dependencies are
   /// long latency (e.g. memory instructions). If we have many long latency
   /// dependencies, it is beneficial to enable SUs multiple levels ahead.
-  SUnit *getNextTargetSU(bool LookDeep = false);
+  SUnit *getNextTargetSU(bool LookDeep = false) const;
   /// Insert the \p SU into the AllSUs and account its \p BlockingCycles into
   /// the TotalCycles. This maintains the list of PrioritySUs.
   void insert(SUnit *SU, unsigned BlockingCycles);
