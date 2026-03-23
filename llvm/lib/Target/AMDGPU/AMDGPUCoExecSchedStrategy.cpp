@@ -185,14 +185,14 @@ unsigned CandidateHeuristics::getHWUICyclesForInst(SUnit *SU) {
        PI != PE; ++PI) {
     ReleaseAtCycle = std::max(ReleaseAtCycle, (unsigned)PI->ReleaseAtCycle);
   }
-    return ReleaseAtCycle;
+  return ReleaseAtCycle;
 }
 
 void CandidateHeuristics::schedNode(SUnit *SU) {
   HardwareUnitInfo *HWUI =
       getHWUIFromFlavor(classifyFlavor(*SU->getInstr(), *SII));
   assert(HWUI);
-  HWUI->schedule(SU, getHWUICyclesForInst(SU));
+  HWUI->markScheduled(SU, getHWUICyclesForInst(SU));
 }
 
 void CandidateHeuristics::initialize(ScheduleDAGMI *SchedDAG,
@@ -273,7 +273,7 @@ bool CandidateHeuristics::tryCriticalResourceDependency(
     GenericSchedulerBase::SchedCandidate &Cand, SchedBoundary *Zone) const {
 
   auto HasPrioritySU = [this, &Cand, &TryCand](unsigned ResourceIdx) {
-    HardwareUnitInfo HWUI = HWUInfo[ResourceIdx];
+    HardwareUnitInfo &HWUI = HWUInfo[ResourceIdx];
 
     auto CandFlavor = classifyFlavor(*Cand.SU->getInstr(), *SII);
     auto TryCandFlavor = classifyFlavor(*TryCand.SU->getInstr(), *SII);
@@ -432,7 +432,7 @@ void AMDGPUCoExecSchedStrategy::initialize(ScheduleDAGMI *DAG) {
 }
 
 void AMDGPUCoExecSchedStrategy::schedNode(SUnit *SU, bool IsTopNode) {
-  Heurs.schedNode(SU);
+  Heurs.updateForScheduling(SU);
   GCNSchedStrategy::schedNode(SU, IsTopNode);
 }
 

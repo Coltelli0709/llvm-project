@@ -229,10 +229,10 @@ public:
   /// Insert the \p SU into the AllSUs and account its \p BlockingCycles into
   /// the TotalCycles. This maintains the list of PrioritySUs.
   void insert(SUnit *SU, unsigned BlockingCycles);
-  /// Schedule the \p SU by removing it from the AllSus and reducing its \p
-  /// BlockingCycles from the TotalCycles. This maintains the list of
-  /// PrioritySUS.
-  void schedule(SUnit *SU, unsigned BlockingCycles);
+  /// Update the state for \p SU being scheduled by removing it from the AllSus
+  /// and reducing its \p BlockingCycles from the TotalCycles. This maintains
+  /// the list of PrioritySUS.
+  void markScheduled(SUnit *SU, unsigned BlockingCycles);
 };
 
 //===----------------------------------------------------------------------===//
@@ -267,7 +267,8 @@ public:
   void initialize(ScheduleDAGMI *DAG, const TargetSchedModel *SchedModel,
                   const TargetRegisterInfo *TRI);
 
-  void schedNode(SUnit *SU);
+  /// Update the state to reflect that \p SU is going to be scheduled.
+  void updateForScheduling(SUnit *SU);
 
   /// Sort the HardwarUnitInfo vector. After sorting, the HWUI that are highest
   /// priority are first. Priority is determined by maximizing coexecution and
