@@ -5685,7 +5685,7 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
   Register SrcReg = MI.getOperand(1).getReg();
   bool isSGPR = TRI->isSGPRClass(MRI.getRegClass(SrcReg));
   Register DstReg = MI.getOperand(0).getReg();
-  unsigned Stratergy = static_cast<unsigned>(MI.getOperand(2).getImm());
+  unsigned Strategy = static_cast<unsigned>(MI.getOperand(2).getImm());
   enum WAVE_REDUCE_STRATEGY : unsigned { DEFAULT = 0, ITERATIVE = 1, DPP = 2 };
   MachineBasicBlock *RetBB = nullptr;
   if (isSGPR) {
@@ -5965,9 +5965,9 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
     unsigned MovOpcForExec = IsWave32 ? AMDGPU::S_MOV_B32 : AMDGPU::S_MOV_B64;
     unsigned ExecReg = IsWave32 ? AMDGPU::EXEC_LO : AMDGPU::EXEC;
     /// TODO: Implement wave reduction for 64-bit values.
-    if (!is32BitOpc || Stratergy == WAVE_REDUCE_STRATEGY::ITERATIVE ||
+    if (!is32BitOpc || Strategy == WAVE_REDUCE_STRATEGY::ITERATIVE ||
         !ST.hasDPP()) { // If target doesn't support DPP operations, default to
-                        // iterative stratergy
+                        // iterative strategy
 
       // To reduce the VGPR using iterative approach, we need to iterate
       // over all the active lanes. Lowering consists of ComputeLoop,
