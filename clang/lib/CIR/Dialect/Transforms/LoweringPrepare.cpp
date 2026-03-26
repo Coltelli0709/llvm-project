@@ -10,6 +10,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Value.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/Cuda.h"
