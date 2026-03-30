@@ -1743,20 +1743,20 @@ void SIRegisterInfo::buildSpillLoadStore(
 
   for (unsigned i = 0, e = NumSubRegs + NumRemSubRegs, RegOffset = 0; i != e;
        ++i, RegOffset += EltSize) {
-    if (i == 0 && IsRegMisaligned) {
-      // For misaligned register tuples, spill only the first sub-reg in the
-      // first iteration.
-      EltSize = 4u;
-      LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
-    }
-    if (i == 1 && IsRegMisaligned) {
-      // The first sub-reg was spilt in the previous iteration.
-      EltSize = RegWidth <= 16 ? RegWidth - 4u : 16u;
-      LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
-    }
-    if (IsRegMisaligned && i == (e - 1)) {
-      EltSize = LastChunk;
-      LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
+    if (IsRegMisaligned) {
+      if (i == 0) {
+        // For misaligned register tuples, spill only the first sub-reg in the
+        // first iteration.
+        EltSize = 4u;
+        LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
+      } else if (i == 1) {
+        // The first sub-reg was spilt in the previous iteration.
+        EltSize = RegWidth <= 16 ? RegWidth - 4u : 16u;
+        LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
+      } else if (LastChunk && (i + 1) == e) {
+        EltSize = LastChunk;
+        LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
+      }
     } else if (i == NumSubRegs) {
       EltSize = RemSize;
       LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
