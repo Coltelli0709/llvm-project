@@ -1092,8 +1092,8 @@ bool AArch64ExpandPseudoImpl::expandSTSHHAtomicStore(
   }
 
   // Emit the hint with the retention policy immediate.
-  MachineInstr *Hint = BuildMI(MBB, MBBI, DL, TII->get(AArch64::STSHH))
-                           .addImm(Policy)
+  MachineInstr *Hint = BuildMI(MBB, MBBI, DL, TII->get(AArch64::HINT))
+                           .addImm(AArch64PHint::keep + Policy)
                            .getInstr();
 
   // Emit the associated store instruction.
