@@ -2869,6 +2869,50 @@ static std::optional<Instruction *> instCombineMaxMinNM(InstCombiner &IC,
   return std::nullopt;
 }
 
+// fcvtzu(uitofp(x)) -> x or zext(x)
+// fcvtzs(sitofp(x)) -> x or sext(x)
+//
+// These NEON intrinsics perform saturating conversions, so unlike generic
+// fptoui/fptosi we cannot exploit UB on overflow. We must prove:
+//   1. The int->FP cast is exact (no precision loss)
+//   2. The value fits in the destination integer type
+static std::optional<Instruction *> instCombineNeonFCvtz(InstCombiner &IC,
+                                                         IntrinsicInst &II) {
+  bool IsUnsigned = II.getIntrinsicID() == Intrinsic::aarch64_neon_fcvtzu;
+
+  // Only handle same-sign cases for now.
+  CastInst *IToFP;
+  if (IsUnsigned)
+    IToFP = dyn_cast<UIToFPInst>(II.getArgOperand(0));
+  else
+    IToFP = dyn_cast<SIToFPInst>(II.getArgOperand(0));
+  if (!IToFP)
+    return std::nullopt;
+
+  // Check that int->FP is exact (no rounding).
+  if (!IC.isKnownExactCastIntToFP(*IToFP))
+    return std::nullopt;
+
+  Value *X = IToFP->getOperand(0);
+  Type *SrcIntTy = X->getType();
+  Type *DstIntTy = II.getType();
+  unsigned SrcBits = SrcIntTy->getScalarSizeInBits();
+  unsigned DstBits = DstIntTy->getScalarSizeInBits();
+
+  // Check that the value fits in the destination integer type (no saturation).
+  // TODO: support narrowing with MaxActiveBits analysis.
+  if (SrcBits > DstBits)
+    return std::nullopt;
+
+  if (SrcBits == DstBits)
+    return IC.replaceInstUsesWith(II, X);
+
+  IC.Builder.SetInsertPoint(&II);
+  Value *Ext = IsUnsigned ? IC.Builder.CreateZExt(X, DstIntTy)
+                          : IC.Builder.CreateSExt(X, DstIntTy);
+  return IC.replaceInstUsesWith(II, Ext);
+}
+
 static std::optional<Instruction *> instCombineSVESrshl(InstCombiner &IC,
                                                         IntrinsicInst &II) {
   Value *Pred = II.getOperand(0);
@@ -3095,6 +3139,9 @@ AArch64TTIImpl::instCombineIntrinsic(InstCombiner &IC,
     return instCombineSVEUxt(IC, II, 32);
   case Intrinsic::aarch64_sme_in_streaming_mode:
     return instCombineInStreamingMode(IC, II);
+  case Intrinsic::aarch64_neon_fcvtzu:
+  case Intrinsic::aarch64_neon_fcvtzs:
+    return instCombineNeonFCvtz(IC, II);
   }
 
   return std::nullopt;
