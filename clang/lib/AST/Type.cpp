@@ -428,9 +428,16 @@ BitIntType::BitIntType(bool IsUnsigned, unsigned NumBits)
       NumBits(NumBits) {}
 
 DependentBitIntType::DependentBitIntType(bool IsUnsigned, Expr *NumBitsExpr)
+    // DependentBitIntType must always be type-dependent.
+    // The expression must be value-dependent, so will also be
+    // instantiation-dependent.
     : Type(DependentBitInt, QualType{},
-           toTypeDependence(NumBitsExpr->getDependence())),
-      ExprAndUnsigned(NumBitsExpr, IsUnsigned) {}
+           toTypeDependence(NumBitsExpr->getDependence()) |
+               TypeDependence::Dependent),
+      ExprAndUnsigned(NumBitsExpr, IsUnsigned) {
+  assert(NumBitsExpr->isValueDependent() &&
+         "NumBitsExpr must be value-dependent");
+}
 
 bool DependentBitIntType::isUnsigned() const {
   return ExprAndUnsigned.getInt();
@@ -4219,15 +4226,10 @@ DecltypeType::DecltypeType(Expr *E, QualType underlyingType, QualType can)
     // C++11 [temp.type]p2: "If an expression e involves a template parameter,
     // decltype(e) denotes a unique dependent type." Hence a decltype type is
     // type-dependent even if its expression is only instantiation-dependent.
-    : Type(Decltype, can,
-           toTypeDependence(E->getDependence()) |
-               (E->isInstantiationDependent() ? TypeDependence::Dependent
-                                              : TypeDependence::None) |
-               (E->getType()->getDependence() &
-                TypeDependence::VariablyModified)),
-      E(E), UnderlyingType(underlyingType) {}
+    : Type(Decltype, can, toTypeDependence(E->getDependence())), E(E),
+      UnderlyingType(underlyingType) {}
 
-bool DecltypeType::isSugared() const { return !E->isInstantiationDependent(); }
+bool DecltypeType::isSugared() const { return !E->isTypeDependent(); }
 
 QualType DecltypeType::desugar() const {
   if (isSugared())
@@ -4711,23 +4713,30 @@ QualType TemplateSpecializationType::getAliasedType() const {
 }
 
 bool clang::TemplateSpecializationType::isSugared() const {
-  return !isDependentType() || isCurrentInstantiation() || isTypeAlias() ||
-         (isPackProducingBuiltinTemplateName(Template) &&
-          isa<SubstBuiltinTemplatePackType>(*getCanonicalTypeInternal()));
+  return isTypeAlias() ||
+         !isa<TemplateSpecializationType>(getCanonicalTypeInternal());
 }
 
 void TemplateSpecializationType::Profile(llvm::FoldingSetNodeID &ID,
                                          const ASTContext &Ctx) {
-  Profile(ID, getKeyword(), Template, template_arguments(),
-          isSugared() ? desugar() : QualType(), Ctx);
+  Profile(ID, getKeyword(), Template, template_arguments(), isTypeAlias(),
+          desugar(), Ctx);
 }
 
 void TemplateSpecializationType::Profile(llvm::FoldingSetNodeID &ID,
                                          ElaboratedTypeKeyword Keyword,
                                          TemplateName T,
                                          ArrayRef<TemplateArgument> Args,
-                                         QualType Underlying,
+                                         bool IsTypeAlias, QualType Underlying,
                                          const ASTContext &Context) {
+  assert(IsTypeAlias || Underlying.isNull() || Underlying.isCanonical());
+  if (!Underlying.isNull()) {
+    if (!IsTypeAlias && isa<TemplateSpecializationType>(Underlying))
+      Underlying = QualType();
+  } else {
+    assert(!IsTypeAlias);
+  }
+
   ID.AddInteger(llvm::to_underlying(Keyword));
   T.Profile(ID);
   Underlying.Profile(ID);

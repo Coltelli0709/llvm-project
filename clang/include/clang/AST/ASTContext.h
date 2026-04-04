@@ -401,6 +401,11 @@ class ASTContext : public RefCountedBase<ASTContext> {
   /// current file before they are compared locally.
   unsigned NextStringLiteralVersion = 0;
 
+  /// A cache mapping from types to their functionally equivalent canonical
+  /// type.
+  mutable llvm::DenseMap<const Type *, QualType>
+      FunctionallyEquivalentTypeCache;
+
   /// MD5 hash of CUID. It is calculated when first used and cached by this
   /// data member.
   mutable std::string CUIDHash;
@@ -1975,9 +1980,10 @@ public:
                                         Decl *AssociatedDecl, unsigned Index,
                                         UnsignedOrNone PackIndex,
                                         bool Final) const;
-  QualType getSubstTemplateTypeParmPackType(Decl *AssociatedDecl,
-                                            unsigned Index, bool Final,
-                                            const TemplateArgument &ArgPack);
+  QualType
+  getSubstTemplateTypeParmPackType(Decl *AssociatedDecl, unsigned Index,
+                                   bool Final,
+                                   const TemplateArgument &ArgPack) const;
   QualType getSubstBuiltinTemplatePack(const TemplateArgument &ArgPack);
 
   QualType
@@ -1993,7 +1999,8 @@ public:
   getTemplateSpecializationType(ElaboratedTypeKeyword Keyword, TemplateName T,
                                 ArrayRef<TemplateArgument> SpecifiedArgs,
                                 ArrayRef<TemplateArgument> CanonicalArgs,
-                                QualType Underlying = QualType()) const;
+                                QualType Underlying = QualType(),
+                                bool Unique = false) const;
 
   QualType
   getTemplateSpecializationType(ElaboratedTypeKeyword Keyword, TemplateName T,
@@ -2964,6 +2971,15 @@ public:
     return getCanonicalType(T1) == getCanonicalType(T2);
   }
 
+  QualType getCanonicalType(QualType QT, bool FunctionallyEquivalent) const;
+  QualType getCanonicalType(QualType QT, bool FunctionallyEquivalent,
+                            bool &AnyNonCanonical) const {
+    QualType R = getCanonicalType(QT, FunctionallyEquivalent);
+    AnyNonCanonical |= !R.isCanonical();
+    return R;
+  }
+  bool hasFunctionallyEquivalentType(QualType T1, QualType T2) const;
+
   /// Determine whether the given expressions \p X and \p Y are equivalent.
   bool hasSameExpr(const Expr *X, const Expr *Y) const;
 
@@ -3118,14 +3134,30 @@ public:
   /// The canonical template argument is the simplest template argument
   /// (which may be a type, value, expression, or declaration) that
   /// expresses the value of the argument.
-  TemplateArgument getCanonicalTemplateArgument(const TemplateArgument &Arg)
-    const;
+  TemplateArgument getCanonicalTemplateArgument(const TemplateArgument &Arg,
+                                                bool FunctionallyEquivalent,
+                                                bool &AnyNonCanonical) const;
+  TemplateArgument
+  getCanonicalTemplateArgument(const TemplateArgument &Arg,
+                               bool FunctionallyEquivalent = false) const {
+    bool AnyNonCanonical = false;
+    return getCanonicalTemplateArgument(Arg, FunctionallyEquivalent,
+                                        AnyNonCanonical);
+  }
 
   /// Canonicalize the given template argument list.
   ///
   /// Returns true if any arguments were non-canonical, false otherwise.
+  bool canonicalizeTemplateArguments(MutableArrayRef<TemplateArgument> Args,
+                                     bool FunctionallyEquivalent,
+                                     bool &AnyNonCanonical) const;
   bool
-  canonicalizeTemplateArguments(MutableArrayRef<TemplateArgument> Args) const;
+  canonicalizeTemplateArguments(MutableArrayRef<TemplateArgument> Args,
+                                bool FunctionallyEquivalent = false) const {
+    bool AnyNonCanonical = false;
+    return canonicalizeTemplateArguments(Args, FunctionallyEquivalent,
+                                         AnyNonCanonical);
+  }
 
   /// Canonicalize the given TemplateTemplateParmDecl.
   TemplateTemplateParmDecl *
@@ -3267,6 +3299,8 @@ public:
 private:
   // Helper for integer ordering
   unsigned getIntegerRank(const Type *T) const;
+
+  QualType buildFunctionallyEquivalentCanonicalType(const Type *T) const;
 
 public:
   //===--------------------------------------------------------------------===//

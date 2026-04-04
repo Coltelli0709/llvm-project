@@ -3561,7 +3561,13 @@ static QualType checkBuiltinTemplateIdType(
     // Synthesize a new template argument list, removing duplicates.
     for (auto T : Ts.getPackAsArray()) {
       assert(T.getKind() == clang::TemplateArgument::Type);
-      if (!Seen.insert(T.getAsType().getCanonicalType()).second)
+      // FIXME: BTK__builtin_dedup_pack is not considered an alias template, so
+      // the template specialization cannot store a non-canonical underlying
+      // type.
+      // When that is fixed, this can use getCommonSugar so it doesn't preserve
+      // arbitrary sugar.
+      T = Context.getCanonicalTemplateArgument(T);
+      if (!Seen.insert(T.getAsType()).second)
         continue;
       OutArgs.push_back(T);
     }
@@ -8907,14 +8913,14 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
   if (isPartialSpecialization) {
     if (CheckTemplatePartialSpecializationArgs(TemplateNameLoc, ClassTemplate,
                                                TemplateArgs.size(),
-                                               CTAI.CanonicalConverted))
+                                               CTAI.SugaredConverted))
       return true;
 
     // FIXME: Move this to CheckTemplatePartialSpecializationArgs so we
     // also do it during instantiation.
     if (!Name.isDependent() &&
         !TemplateSpecializationType::anyDependentTemplateArguments(
-            TemplateArgs, CTAI.CanonicalConverted)) {
+            TemplateArgs, CTAI.SugaredConverted)) {
       Diag(TemplateNameLoc, diag::err_partial_spec_fully_specialized)
         << ClassTemplate->getDeclName();
       isPartialSpecialization = false;
@@ -8922,15 +8928,20 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
     }
   }
 
+  SmallVector<TemplateArgument, 4> FunctionallyEquivalentConverted =
+      CTAI.SugaredConverted;
+  Context.canonicalizeTemplateArguments(FunctionallyEquivalentConverted,
+                                        /*FunctionallyEquivalent=*/true);
+
   void *InsertPos = nullptr;
   ClassTemplateSpecializationDecl *PrevDecl = nullptr;
 
   if (isPartialSpecialization)
     PrevDecl = ClassTemplate->findPartialSpecialization(
-        CTAI.CanonicalConverted, TemplateParams, InsertPos);
+        FunctionallyEquivalentConverted, TemplateParams, InsertPos);
   else
-    PrevDecl =
-        ClassTemplate->findSpecialization(CTAI.CanonicalConverted, InsertPos);
+    PrevDecl = ClassTemplate->findSpecialization(
+        FunctionallyEquivalentConverted, InsertPos);
 
   ClassTemplateSpecializationDecl *Specialization = nullptr;
 
@@ -8947,7 +8958,8 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
     // this explicit specialization or friend declaration.
     Specialization = ClassTemplateSpecializationDecl::Create(
         Context, Kind, ClassTemplate->getDeclContext(), KWLoc, TemplateNameLoc,
-        ClassTemplate, CTAI.CanonicalConverted, CTAI.StrictPackMatch, PrevDecl);
+        ClassTemplate, FunctionallyEquivalentConverted, CTAI.StrictPackMatch,
+        PrevDecl);
     Specialization->setTemplateArgsAsWritten(TemplateArgs);
     SetNestedNameSpecifier(*this, Specialization, SS);
     if (TemplateParameterLists.size() > 0) {
@@ -8958,14 +8970,13 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
     if (!PrevDecl)
       ClassTemplate->AddSpecialization(Specialization, InsertPos);
   } else {
-    CanQualType CanonType = CanQualType::CreateUnsafe(
-        Context.getCanonicalTemplateSpecializationType(
-            ElaboratedTypeKeyword::None,
-            TemplateName(ClassTemplate->getCanonicalDecl()),
-            CTAI.CanonicalConverted));
-    if (Context.hasSameType(
-            CanonType,
-            ClassTemplate->getCanonicalInjectedSpecializationType(Context)) &&
+    QualType CanonType = Context.getTemplateSpecializationType(
+        ElaboratedTypeKeyword::None,
+        TemplateName(ClassTemplate->getCanonicalDecl()),
+        FunctionallyEquivalentConverted, /*CanonicalArgs=*/{},
+        /*Underlying=*/QualType(), /*Unique=*/true);
+    if (CanonType ==
+            ClassTemplate->getCanonicalInjectedSpecializationType(Context) &&
         (!Context.getLangOpts().CPlusPlus20 ||
          !TemplateParams->hasAssociatedConstraints())) {
       // C++ [temp.class.spec]p9b3:
@@ -8992,7 +9003,8 @@ DeclResult Sema::ActOnClassTemplateSpecialization(
     ClassTemplatePartialSpecializationDecl *Partial =
         ClassTemplatePartialSpecializationDecl::Create(
             Context, Kind, DC, KWLoc, TemplateNameLoc, TemplateParams,
-            ClassTemplate, CTAI.CanonicalConverted, CanonType, PrevPartial);
+            ClassTemplate, FunctionallyEquivalentConverted,
+            Context.getCanonicalType(CanonType), PrevPartial);
     Partial->setTemplateArgsAsWritten(TemplateArgs);
     SetNestedNameSpecifier(*this, Partial, SS);
     if (TemplateParameterLists.size() > 1 && SS.isSet()) {

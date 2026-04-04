@@ -126,7 +126,7 @@ QualType clang::desugarForDiagnostic(ASTContext &Context, QualType QT,
           ShouldAKA = true;
           QT = Context.getTemplateSpecializationType(
               TST->getKeyword(), TST->getTemplateName(), Args,
-              /*CanonicalArgs=*/{}, QT);
+              /*CanonicalArgs=*/{}, QT.getCanonicalType());
         }
         break;
       }

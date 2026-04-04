@@ -1202,11 +1202,13 @@ CanQualType
 ClassTemplatePartialSpecializationDecl::getCanonicalInjectedSpecializationType(
     const ASTContext &Ctx) const {
   if (CanonInjectedTST.isNull()) {
+    SmallVector<TemplateArgument, 4> CanonicalArgs(getTemplateArgs().asArray());
+    Ctx.canonicalizeTemplateArguments(CanonicalArgs);
     CanonInjectedTST =
         CanQualType::CreateUnsafe(Ctx.getCanonicalTemplateSpecializationType(
             ElaboratedTypeKeyword::None,
             TemplateName(getSpecializedTemplate()->getCanonicalDecl()),
-            getTemplateArgs().asArray()));
+            CanonicalArgs));
   }
   return CanonInjectedTST;
 }

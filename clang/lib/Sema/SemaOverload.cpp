@@ -1409,7 +1409,7 @@ static bool IsOverloadOrOverrideImpl(Sema &SemaRef, FunctionDecl *New,
     bool SameTemplateParameterList = SemaRef.TemplateParameterListsAreEqual(
         NewTemplate, NewTemplate->getTemplateParameters(), OldTemplate,
         OldTemplate->getTemplateParameters(), false, Sema::TPL_TemplateMatch);
-    bool SameReturnType = SemaRef.Context.hasSameType(
+    bool SameReturnType = SemaRef.Context.hasFunctionallyEquivalentType(
         Old->getDeclaredReturnType(), New->getDeclaredReturnType());
     // FIXME(GH58571): Match template parameter list even for non-constrained
     // template heads. This currently ensures that the code prior to C++20 is
@@ -3583,7 +3583,7 @@ bool Sema::FunctionParamTypesAreEqual(ArrayRef<QualType> Old,
     QualType NewType =
         Context.removePtrSizeAddrSpace((New.begin() + J)->getUnqualifiedType());
 
-    if (!Context.hasSameType(OldType, NewType)) {
+    if (!Context.hasFunctionallyEquivalentType(OldType, NewType)) {
       if (ArgPos)
         *ArgPos = Idx;
       return false;

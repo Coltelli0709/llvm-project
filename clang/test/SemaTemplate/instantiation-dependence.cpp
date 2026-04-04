@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++23 -verify %s
+// RUN: %clang_cc1 -std=c++26 -verify %s
 
 // Ensure we substitute into instantiation-dependent but non-dependent
 // constructs. The poster-child for this is...
@@ -48,17 +48,13 @@ namespace PR46791 { // also PR45782
     static constexpr int specialization = 0;
   };
 
-  // FIXME: Per a strict interpretation of the C++ rules, the two void_t<...>
-  // types below are equivalent -- we only (effectively) do token-by-token
-  // comparison for *expressions* appearing within types. But all other
-  // implementations accept this, using rules that are unclear.
   template<typename T>
-  struct trait<T, void_t<typename T::value_type>> { // expected-note {{previous}} FIXME-note {{matches}}
+  struct trait<T, void_t<typename T::value_type>> { // expected-note {{matches}}
     static constexpr int specialization = 1;
   };
 
   template<typename T>
-  struct trait<T, void_t<typename T::element_type>> { // expected-error {{redefinition}} FIXME-note {{matches}}
+  struct trait<T, void_t<typename T::element_type>> { // expected-note {{matches}}
     static constexpr int specialization = 2;
   };
 
@@ -68,11 +64,9 @@ namespace PR46791 { // also PR45782
   struct D : B, C {};
 
   static_assert(trait<A>::specialization == 0);
-  static_assert(trait<B>::specialization == 1); // FIXME expected-error {{failed}} \
-                                                // expected-note {{evaluates to '0 == 1'}}
-  static_assert(trait<C>::specialization == 2); // FIXME expected-error {{failed}} \
-                                                // expected-note {{evaluates to '0 == 2'}}
-  static_assert(trait<D>::specialization == 0); // FIXME-error {{ambiguous partial specialization}}
+  static_assert(trait<B>::specialization == 1);
+  static_assert(trait<C>::specialization == 2);
+  static_assert(trait<D>::specialization == 0); // expected-error {{ambiguous partial specialization}}
 }
 
 namespace TypeQualifier {
@@ -103,3 +97,75 @@ namespace MemberOfInstantiationDependentBase {
   void q(C1<int> *c) { c->f(0); }
   void q(C2<int> *c) { c->f(0); }
 }
+
+namespace GH8740 {
+  struct A { typedef int T; };
+  template<int> struct U { typedef int T; };
+  template<typename> struct S {
+    A a;
+    int n = decltype(a)::T();
+    int m = U<sizeof(a)>::T();
+  };
+  S<char> s;
+} // namespace GH8740
+
+namespace NonInstDependentArgs1 {
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, void_t<char>> {}; // expected-note  {{previous}}
+  template<typename T> struct X<T, void_t<void>> {}; // expected-error {{redefinition}}
+} // namespace NonInstDependentArgs1
+
+namespace NonInstDependentArgs2 {
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, void_t<T, void>> {};
+  template<typename T> struct X<T, void_t<T, char>> {};
+} // namespace NonInstDependentArgs2
+
+namespace Level1 {
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, void_t<T>> {};
+  template<typename T> struct X<T, void_t<T*>> {};
+} // namespace Level1
+
+namespace Level2 {
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, void_t<void_t<T>>> {};
+  template<typename T> struct X<T, void_t<void_t<T*>>> {};
+} // namespace Level2
+
+namespace IndirectAlias1 {
+  template<class T> using alias = void_t<T>;
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, void_t<T>> {}; // expected-note  {{previous}}
+  template<typename T> struct X<T, alias<T>> {};  // expected-error {{redefinition}}
+} // namspace IndirectAlias1
+
+namespace IndirectAlias2 {
+  template<class T, class> using alias1 = T;
+  template<class T, class U> using alias2 = alias1<T, U>;
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, T> {};
+  template<typename T> struct X<T, alias1<T, T>> {}; // expected-note  {{previous}}
+  template<typename T> struct X<T, alias2<T, T>> {}; // expected-error {{redefinition}}
+} // namespaceIndirectAlias2
+
+namespace PackIndexing {
+  // FIXME: This should not be a redefinition.
+  template<class ...Ts> using alias = Ts...[0];
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, T> {};                          // expected-note  {{previous}}
+  template<typename T> struct X<T, alias<T, typename T::type>> {}; // expected-error {{redefinition}}
+} // namespace PackIndexing
+
+namespace DeclType {
+  template<typename T, typename = void> struct X;
+  template<typename T> struct X<T, decltype(void())> {};
+  template<typename T> struct X<T, decltype(void_t<typename T::type>())> {}; // FIXME-note  {{previous}}
+  template<typename T> struct X<T, decltype(void_t<typename T::type>())> {}; // FIXME-error {{redefinition}}
+} // namespace DeclType
+
+namespace UnaryTransformDecay {
+  template<class T, class U = void> struct X;
+  template<class T> struct X<T, __decay(int[T()])> {}; // FIXME-note  {{previous}}
+  template<class T> struct X<T, __decay(int[T()])> {}; // FIXME-error {{redefinition}}
+} // namespace UnaryTransformDecay

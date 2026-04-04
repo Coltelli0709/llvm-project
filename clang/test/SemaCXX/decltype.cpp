@@ -135,7 +135,7 @@ namespace GH97646 {
   template<bool B>
   void f() {
     decltype(B) x = false;
-    !x;
+    !x; // expected-warning {{expression result unused}}
   }
 }
 
@@ -240,6 +240,15 @@ void test() { (void)C::XBitMask<0>; }
 
 }
 #endif
+
+namespace value_dependent {
+  template<int V> void f() {
+    decltype(V) x = nullptr;
+    // expected-error@-1 {{cannot initialize a variable of type 'decltype(V)' (aka 'int') with an rvalue of type 'std::nullptr_t'}}
+  }
+  template<typename T> decltype(int(T())) g() {}
+  template<typename T> decltype(int(T(0))) g() {}
+} // namespace value_dependent
 
 template<typename>
 class conditional {

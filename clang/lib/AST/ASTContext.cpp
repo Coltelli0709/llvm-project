@@ -3172,21 +3172,34 @@ ASTContext::getASTObjCInterfaceLayout(const ObjCInterfaceDecl *D) const {
 
 static auto getCanonicalTemplateArguments(const ASTContext &C,
                                           ArrayRef<TemplateArgument> Args,
-                                          bool &AnyNonCanonArgs) {
+                                          bool &AnyChanged,
+                                          bool FunctionallyEquivalent,
+                                          bool &AnyNonCanonical) {
   SmallVector<TemplateArgument, 16> CanonArgs(Args);
-  AnyNonCanonArgs |= C.canonicalizeTemplateArguments(CanonArgs);
+  AnyChanged |= C.canonicalizeTemplateArguments(
+      CanonArgs, FunctionallyEquivalent, AnyNonCanonical);
   return CanonArgs;
 }
 
+static auto getCanonicalTemplateArguments(const ASTContext &C,
+                                          ArrayRef<TemplateArgument> Args,
+                                          bool &AnyChanged) {
+  bool AnyNonCanonical = false;
+  return getCanonicalTemplateArguments(
+      C, Args, AnyChanged, /*FunctionallyEquivalent=*/false, AnyNonCanonical);
+}
+
 bool ASTContext::canonicalizeTemplateArguments(
-    MutableArrayRef<TemplateArgument> Args) const {
-  bool AnyNonCanonArgs = false;
+    MutableArrayRef<TemplateArgument> Args, bool FunctionallyEquivalent,
+    bool &AnyNonCanonical) const {
+  bool AnyChanged = false;
   for (auto &Arg : Args) {
     TemplateArgument OrigArg = Arg;
-    Arg = getCanonicalTemplateArgument(Arg);
-    AnyNonCanonArgs |= !Arg.structurallyEquals(OrigArg);
+    Arg = getCanonicalTemplateArgument(Arg, FunctionallyEquivalent,
+                                       AnyNonCanonical);
+    AnyChanged |= !Arg.structurallyEquals(OrigArg);
   }
-  return AnyNonCanonArgs;
+  return AnyChanged;
 }
 
 //===----------------------------------------------------------------------===//
@@ -5861,10 +5874,9 @@ QualType ASTContext::getSubstTemplateTypeParmType(QualType Replacement,
   return QualType(SubstParm, 0);
 }
 
-QualType
-ASTContext::getSubstTemplateTypeParmPackType(Decl *AssociatedDecl,
-                                             unsigned Index, bool Final,
-                                             const TemplateArgument &ArgPack) {
+QualType ASTContext::getSubstTemplateTypeParmPackType(
+    Decl *AssociatedDecl, unsigned Index, bool Final,
+    const TemplateArgument &ArgPack) const {
 #ifndef NDEBUG
   for (const auto &P : ArgPack.pack_elements())
     assert(P.getKind() == TemplateArgument::Type && "Pack contains a non-type");
@@ -6041,8 +6053,8 @@ QualType ASTContext::getCanonicalTemplateSpecializationType(
 #endif
 
   llvm::FoldingSetNodeID ID;
-  TemplateSpecializationType::Profile(ID, Keyword, Template, Args, QualType(),
-                                      *this);
+  TemplateSpecializationType::Profile(ID, Keyword, Template, Args,
+                                      /*IsTypeAlias=*/false, QualType(), *this);
   void *InsertPos = nullptr;
   if (auto *T = TemplateSpecializationTypes.FindNodeOrInsertPos(ID, InsertPos))
     return QualType(T, 0);
@@ -6063,9 +6075,27 @@ QualType ASTContext::getCanonicalTemplateSpecializationType(
 QualType ASTContext::getTemplateSpecializationType(
     ElaboratedTypeKeyword Keyword, TemplateName Template,
     ArrayRef<TemplateArgument> SpecifiedArgs,
-    ArrayRef<TemplateArgument> CanonicalArgs, QualType Underlying) const {
-  const auto *TD = Template.getAsTemplateDecl(/*IgnoreDeduced=*/true);
-  bool IsTypeAlias = TD && TD->isTypeAlias();
+    ArrayRef<TemplateArgument> CanonicalArgs, QualType Underlying,
+    bool Unique) const {
+
+  bool IsTypeAlias = false;
+  if (!Underlying.isNull()) {
+    const auto *TD = Template.getAsTemplateDecl(/*IgnoreDeduced=*/true);
+    IsTypeAlias = TD && TD->isTypeAlias();
+    if (!IsTypeAlias)
+      Underlying = getCanonicalType(Underlying);
+  }
+
+  llvm::FoldingSetNodeID ID;
+  void *InsertPos = nullptr;
+  if (Unique) {
+    TemplateSpecializationType::Profile(ID, Keyword, Template, SpecifiedArgs,
+                                        IsTypeAlias, Underlying, *this);
+    if (auto *T =
+            TemplateSpecializationTypes.FindNodeOrInsertPos(ID, InsertPos))
+      return QualType(T, 0);
+  }
+
   if (Underlying.isNull()) {
     TemplateName CanonTemplate =
         getCanonicalTemplateName(Template, /*IgnoreDeduced=*/true);
@@ -6087,18 +6117,16 @@ QualType ASTContext::getTemplateSpecializationType(
           });
     }
 
-    // We can get here with an alias template when the specialization
-    // contains a pack expansion that does not match up with a parameter
-    // pack, or a builtin template which cannot be resolved due to dependency.
-    assert((!isa_and_nonnull<TypeAliasTemplateDecl>(TD) ||
-            hasAnyPackExpansions(CanonicalArgs)) &&
-           "Caller must compute aliased type");
-    IsTypeAlias = false;
-
     Underlying = getCanonicalTemplateSpecializationType(
         CanonKeyword, CanonTemplate, CanonicalArgs);
     if (!NonCanonical)
       return Underlying;
+
+    if (Unique) {
+      [[maybe_unused]] auto *T =
+          TemplateSpecializationTypes.FindNodeOrInsertPos(ID, InsertPos);
+      assert(!T && "broken canonical type");
+    }
   }
   void *Mem = Allocate(sizeof(TemplateSpecializationType) +
                            sizeof(TemplateArgument) * SpecifiedArgs.size() +
@@ -6107,6 +6135,8 @@ QualType ASTContext::getTemplateSpecializationType(
   auto *Spec = new (Mem) TemplateSpecializationType(
       Keyword, Template, IsTypeAlias, SpecifiedArgs, Underlying);
   Types.push_back(Spec);
+  if (Unique)
+    TemplateSpecializationTypes.InsertNode(Spec, InsertPos);
   return QualType(Spec, 0);
 }
 
@@ -6691,12 +6721,11 @@ QualType ASTContext::getReferenceQualifiedType(const Expr *E) const {
 /// expression, and would not give a significant memory saving, since there
 /// is an Expr tree under each such type.
 QualType ASTContext::getDecltypeType(Expr *E, QualType UnderlyingType) const {
-  // C++11 [temp.type]p2:
-  //   If an expression e involves a template parameter, decltype(e) denotes a
-  //   unique dependent type. Two such decltype-specifiers refer to the same
-  //   type only if their expressions are equivalent (14.5.6.1).
+  // C++26 [temp.type]p4: If an expression e is type-dependent, decltype(e)
+  // denotes a unique dependent type. Two such decltype-specifiers refer to the
+  // same type only if their expressions are equivalent ([temp.over.link]).
   QualType CanonType;
-  if (!E->isInstantiationDependent()) {
+  if (!E->isTypeDependent()) {
     CanonType = getCanonicalType(UnderlyingType);
   } else if (!UnderlyingType.isNull()) {
     CanonType = getDecltypeType(E, QualType());
@@ -7888,51 +7917,66 @@ bool ASTContext::isSameEntity(const NamedDecl *X, const NamedDecl *Y) const {
 }
 
 TemplateArgument
-ASTContext::getCanonicalTemplateArgument(const TemplateArgument &Arg) const {
+ASTContext::getCanonicalTemplateArgument(const TemplateArgument &Arg,
+                                         bool FunctionallyEquivalent,
+                                         bool &AnyNonCanonical) const {
   switch (Arg.getKind()) {
     case TemplateArgument::Null:
       return Arg;
 
     case TemplateArgument::Expression:
+      // FIXME: Do functionally equivalent expressions need different profiling?
       return TemplateArgument(Arg.getAsExpr(), /*IsCanonical=*/true,
                               Arg.getIsDefaulted());
 
-    case TemplateArgument::Declaration: {
-      auto *D = cast<ValueDecl>(Arg.getAsDecl()->getCanonicalDecl());
-      return TemplateArgument(D, getCanonicalType(Arg.getParamTypeForDecl()),
-                              Arg.getIsDefaulted());
-    }
+    case TemplateArgument::Declaration:
+      return TemplateArgument(
+          cast<ValueDecl>(Arg.getAsDecl()->getCanonicalDecl()),
+          getCanonicalType(Arg.getParamTypeForDecl(), FunctionallyEquivalent,
+                           AnyNonCanonical),
+          Arg.getIsDefaulted());
 
     case TemplateArgument::NullPtr:
-      return TemplateArgument(getCanonicalType(Arg.getNullPtrType()),
-                              /*isNullPtr*/ true, Arg.getIsDefaulted());
+      return TemplateArgument(getCanonicalType(Arg.getNullPtrType(),
+                                               FunctionallyEquivalent,
+                                               AnyNonCanonical),
+                              /*isNullPtr=*/true, Arg.getIsDefaulted());
 
     case TemplateArgument::Template:
+      // FIXME: Implement functional canonicalization of template names.
       return TemplateArgument(getCanonicalTemplateName(Arg.getAsTemplate()),
                               Arg.getIsDefaulted());
 
     case TemplateArgument::TemplateExpansion:
+      // FIXME: Implement functional canonicalization of template names.
       return TemplateArgument(
           getCanonicalTemplateName(Arg.getAsTemplateOrTemplatePattern()),
           Arg.getNumTemplateExpansions(), Arg.getIsDefaulted());
 
     case TemplateArgument::Integral:
-      return TemplateArgument(Arg, getCanonicalType(Arg.getIntegralType()));
+      return TemplateArgument(Arg, getCanonicalType(Arg.getIntegralType(),
+                                                    FunctionallyEquivalent,
+                                                    AnyNonCanonical));
 
     case TemplateArgument::StructuralValue:
       return TemplateArgument(*this,
-                              getCanonicalType(Arg.getStructuralValueType()),
+                              getCanonicalType(Arg.getStructuralValueType(),
+                                               FunctionallyEquivalent,
+                                               AnyNonCanonical),
                               Arg.getAsStructuralValue(), Arg.getIsDefaulted());
 
     case TemplateArgument::Type:
-      return TemplateArgument(getCanonicalType(Arg.getAsType()),
-                              /*isNullPtr*/ false, Arg.getIsDefaulted());
+      return TemplateArgument(getCanonicalType(Arg.getAsType(),
+                                               FunctionallyEquivalent,
+                                               AnyNonCanonical),
+                              /*isNullPtr=*/false, Arg.getIsDefaulted());
 
     case TemplateArgument::Pack: {
-      bool AnyNonCanonArgs = false;
+      bool AnyChanged = false;
       auto CanonArgs = ::getCanonicalTemplateArguments(
-          *this, Arg.pack_elements(), AnyNonCanonArgs);
-      if (!AnyNonCanonArgs)
+          *this, Arg.pack_elements(), AnyChanged, FunctionallyEquivalent,
+          AnyNonCanonical);
+      if (!AnyChanged)
         return Arg;
       auto NewArg = TemplateArgument::CreatePackCopy(
           const_cast<ASTContext &>(*this), CanonArgs);
@@ -13856,6 +13900,391 @@ uint64_t ASTContext::getTargetNullPointerValue(QualType QT) const {
 
 unsigned ASTContext::getTargetAddressSpace(LangAS AS) const {
   return getTargetInfo().getTargetAddressSpace(AS);
+}
+
+static NestedNameSpecifier
+getFunctionallyEquivalentCanonicalQualifier(const ASTContext &Context,
+                                            NestedNameSpecifier Qualifier,
+                                            bool &AnyNonCanonical) {
+  if (Qualifier.getKind() == NestedNameSpecifier::Kind::Type)
+    return NestedNameSpecifier(
+        Context
+            .getCanonicalType(QualType(Qualifier.getAsType(), 0),
+                              /*FunctionallyEquivalent=*/true, AnyNonCanonical)
+            .getTypePtr());
+  return Qualifier.getCanonical();
+}
+
+QualType ASTContext::getCanonicalType(QualType QT,
+                                      bool FunctionallyEquivalent) const {
+  if (!FunctionallyEquivalent)
+    return QT.getCanonicalType();
+
+  // A canonical type is functionally equivalent to itself.
+  if (QT.isCanonical())
+    return QT;
+
+  // A non-instantiation-dependent type is functionally equivalent to its
+  // canonical type.
+  if (!QT->isInstantiationDependentType())
+    return getCanonicalType(QT);
+  auto [T, Qualifiers] = QT.split();
+
+  auto It = FunctionallyEquivalentTypeCache.find(T);
+  if (It != FunctionallyEquivalentTypeCache.end())
+    return It->second;
+
+  QualType R = buildFunctionallyEquivalentCanonicalType(T);
+  assert(hasSameType(QualType(T, 0), R));
+
+  auto [_, Inserted] = FunctionallyEquivalentTypeCache.try_emplace(T, R);
+  assert(Inserted && "Unexpected cache entry for type");
+
+  return getQualifiedType(R, Qualifiers);
+}
+
+QualType
+ASTContext::buildFunctionallyEquivalentCanonicalType(const Type *T) const {
+  assert(!T->isCanonicalUnqualified());
+  assert(T->isInstantiationDependentType());
+
+  // If none of the inputs became non-canonical, just return the canonical type.
+  // It's not helpful for the applications of this transform to track whether
+  // the inputs changed, because they will mostly refer to template parameters
+  // that haven't been canonicalized.
+  bool AnyNonCanonical = false;
+  switch (T->getTypeClass()) {
+  case Type::Builtin:
+    llvm_unreachable(
+        "always canonical types should have been handled by this point");
+  case Type::PredefinedSugar:
+    llvm_unreachable("never-instantation-dependent types should have been "
+                     "handled by this point");
+  case Type::Complex:
+  case Type::FunctionNoProto:
+  case Type::Adjusted:
+  case Type::Decayed:
+  case Type::Auto:
+  case Type::DeducedTemplateSpecialization:
+  case Type::ObjCObject:
+  case Type::ObjCInterface:
+  case Type::ObjCObjectPointer:
+  case Type::Atomic:
+  case Type::Record:
+  case Type::Enum:
+  case Type::DependentVector:
+  case Type::Vector:
+  case Type::ArrayParameter:
+  case Type::BTFTagAttributed:
+  case Type::BitInt:
+  case Type::CountAttributed:
+  case Type::HLSLAttributedResource:
+  case Type::HLSLInlineSpirv:
+  case Type::MacroQualified:
+  case Type::ObjCTypeParam:
+  case Type::Pipe:
+  case Type::TypeOf:
+  case Type::TypeOfExpr:
+  case Type::Using:
+  case Type::DependentBitInt:
+  case Type::OverflowBehavior:
+  case Type::SubstBuiltinTemplatePack:
+  case Type::UnresolvedUsing:
+    T->dump();
+    llvm_unreachable("unimplemented");
+  case Type::FunctionProto: {
+    const auto *TT = cast<FunctionProtoType>(T);
+    QualType RT = getCanonicalType(
+        TT->getReturnType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    SmallVector<QualType, 8> PTs(TT->getParamTypes().size());
+    llvm::transform(TT->getParamTypes(), PTs.begin(), [&](QualType PT) {
+      return getCanonicalType(PT, /*FunctionallyEquivalent=*/true,
+                              AnyNonCanonical);
+    });
+    if (!AnyNonCanonical)
+      break;
+    return getFunctionType(RT, PTs, TT->getExtProtoInfo());
+  }
+  case Type::Pointer: {
+    const auto *TT = cast<PointerType>(T);
+    QualType Pointee = getCanonicalType(
+        TT->getPointeeType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getPointerType(Pointee);
+  }
+  case Type::LValueReference: {
+    const auto *TT = cast<LValueReferenceType>(T);
+    QualType Pointee = getCanonicalType(
+        TT->getPointeeType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getLValueReferenceType(Pointee);
+  }
+  case Type::RValueReference: {
+    const auto *TT = cast<RValueReferenceType>(T);
+    QualType Pointee = getCanonicalType(
+        TT->getPointeeType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getRValueReferenceType(Pointee);
+  }
+  case Type::InjectedClassName: {
+    const auto *TT = cast<InjectedClassNameType>(T);
+
+    ElaboratedTypeKeyword Keyword =
+        ::getCanonicalElaboratedTypeKeyword(TT->getKeyword());
+    NestedNameSpecifier Qualifier =
+        ::getFunctionallyEquivalentCanonicalQualifier(*this, TT->getQualifier(),
+                                                      AnyNonCanonical);
+    const TagDecl *ND = TT->getDecl()->getCanonicalDecl();
+    if (!AnyNonCanonical)
+      break;
+    return getTagType(Keyword, Qualifier, ND, /*OwnsTag=*/false);
+  }
+  case Type::Attributed:
+    return getCanonicalType(cast<AttributedType>(T)->desugar(),
+                            /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+  case Type::Paren:
+    return getCanonicalType(cast<ParenType>(T)->desugar(),
+                            /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+  case Type::PackExpansion: {
+    const auto *TT = cast<PackExpansionType>(T);
+    QualType Pattern = getCanonicalType(
+        TT->getPattern(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getPackExpansionType(Pattern, TT->getNumExpansions(),
+                                /*ExpectPackInType=*/false);
+  }
+  case Type::PackIndexing: {
+    const auto *TT = cast<PackIndexingType>(T);
+
+    // This type holds on to instantiation-dependence.
+    assert(!TT->isSugared());
+
+    QualType Pattern = getCanonicalType(
+        TT->getPattern(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    SmallVector<QualType, 8> Expansions(TT->getExpansions().size());
+    llvm::transform(TT->getExpansions(), Expansions.begin(), [&](QualType E) {
+      return getCanonicalType(E, /*FunctionallyEquivalent=*/true,
+                              AnyNonCanonical);
+    });
+    if (!AnyNonCanonical)
+      break;
+    return getPackIndexingType(Pattern, TT->getIndexExpr(),
+                               TT->isFullySubstituted(), Expansions,
+                               TT->getSelectedIndex());
+  }
+  case Type::UnaryTransform:
+    // FIXME: Unimplemented. These appear to have broken canonicalization.
+    break;
+  case Type::MemberPointer: {
+    const auto *TT = cast<MemberPointerType>(T);
+    const auto *Cls = TT->getMostRecentCXXRecordDecl();
+    NestedNameSpecifier Qualifier =
+        ::getFunctionallyEquivalentCanonicalQualifier(*this, TT->getQualifier(),
+                                                      AnyNonCanonical);
+    // If the qualifier became canonical and we have a class (ie it is
+    // non-dependent), then we can drop the qualifier entirely.
+    if (Cls && !AnyNonCanonical)
+      Qualifier = std::nullopt;
+    QualType Pointee = getCanonicalType(
+        TT->getPointeeType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getMemberPointerType(Pointee, Qualifier, Cls);
+  }
+  case Type::BlockPointer: {
+    const auto *TT = cast<BlockPointerType>(T);
+    QualType Pointee = getCanonicalType(
+        TT->getPointeeType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getBlockPointerType(Pointee);
+  }
+  case Type::IncompleteArray: {
+    const auto *TT = cast<IncompleteArrayType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getIncompleteArrayType(ElementType, TT->getSizeModifier(),
+                                  TT->getIndexTypeCVRQualifiers());
+  }
+  case Type::ConstantArray: {
+    const auto *TT = cast<ConstantArrayType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getConstantArrayType(ElementType, TT->getSize(), TT->getSizeExpr(),
+                                TT->getSizeModifier(),
+                                TT->getIndexTypeCVRQualifiers());
+  }
+  case Type::VariableArray: {
+    const auto *TT = cast<VariableArrayType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getVariableArrayType(ElementType, TT->getSizeExpr(),
+                                TT->getSizeModifier(),
+                                TT->getIndexTypeCVRQualifiers());
+  }
+  case Type::DependentSizedArray: {
+    const auto *TT = cast<DependentSizedArrayType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getDependentSizedArrayType(ElementType, TT->getSizeExpr(),
+                                      TT->getSizeModifier(),
+                                      TT->getIndexTypeCVRQualifiers());
+  }
+  case Type::ExtVector: {
+    const auto *TT = cast<ExtVectorType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getExtVectorType(ElementType, TT->getNumElements());
+  }
+  case Type::DependentSizedExtVector: {
+    const auto *TT = cast<DependentSizedExtVectorType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getDependentSizedExtVectorType(ElementType, TT->getSizeExpr(),
+                                          TT->getAttributeLoc());
+  }
+  case Type::ConstantMatrix: {
+    const auto *TT = cast<ConstantMatrixType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getConstantMatrixType(ElementType, TT->getNumRows(),
+                                 TT->getNumColumns());
+  }
+  case Type::DependentSizedMatrix: {
+    const auto *TT = cast<DependentSizedMatrixType>(T);
+    QualType ElementType = getCanonicalType(
+        TT->getElementType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getDependentSizedMatrixType(ElementType, TT->getRowExpr(),
+                                       TT->getColumnExpr(),
+                                       TT->getAttributeLoc());
+  }
+  case Type::DependentAddressSpace: {
+    const auto *TT = cast<DependentAddressSpaceType>(T);
+    QualType Pointee = getCanonicalType(
+        TT->getPointeeType(), /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getDependentAddressSpaceType(Pointee, TT->getAddrSpaceExpr(),
+                                        TT->getAttributeLoc());
+  }
+  case Type::SubstTemplateTypeParmPack: {
+    const auto *TT = cast<SubstTemplateTypeParmPackType>(T);
+    TemplateArgument ArgPack = getCanonicalTemplateArgument(
+        TT->getArgumentPack(), /*FunctionallyEquivalent=*/true,
+        AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getSubstTemplateTypeParmPackType(
+        TT->getAssociatedDecl()->getCanonicalDecl(), TT->getIndex(),
+        TT->getFinal(), ArgPack);
+  }
+  case Type::DependentName: {
+    const auto *TT = cast<DependentNameType>(T);
+    ElaboratedTypeKeyword Keyword =
+        ::getCanonicalElaboratedTypeKeyword(TT->getKeyword());
+    NestedNameSpecifier Qualifier =
+        ::getFunctionallyEquivalentCanonicalQualifier(*this, TT->getQualifier(),
+                                                      AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getDependentNameType(Keyword, Qualifier, TT->getIdentifier());
+  }
+  case Type::TemplateSpecialization: {
+    const auto *TT = cast<TemplateSpecializationType>(T);
+    // For a type alias, we want to keep it only if there are unused
+    // instantiation-dependent template arguments.
+    if (TT->isTypeAlias()) {
+      const TemplateDecl *TD = TT->getTemplateName().getAsTemplateDecl();
+      auto As = TT->template_arguments();
+      bool AnyUnusedInstantiationDependentArgs = false;
+      for (const NamedDecl *PD : TD->getTemplateParameters()->asArray()) {
+        if (As.empty())
+          break;
+        auto CurAs = As;
+        // If this is a parameter pack, a use of this parameter means all of the
+        // remaining template arguments are used.
+        if (!PD->isTemplateParameterPack())
+          CurAs = CurAs.take_front(1);
+        if (!PD->isReferenced()) {
+          auto Dep = TemplateArgumentDependence::None;
+          for (const auto &A : CurAs)
+            Dep |= A.getDependence();
+          if (Dep & TemplateArgumentDependence::Instantiation) {
+            AnyUnusedInstantiationDependentArgs = true;
+            break;
+          }
+        }
+        As = As.drop_front(CurAs.size());
+      }
+      if (!AnyUnusedInstantiationDependentArgs)
+        return getCanonicalType(TT->getAliasedType(),
+                                /*FunctionallyEquivalent=*/true,
+                                AnyNonCanonical);
+      // Otherwise, we are keeping the type alias. This on itself makes the
+      // resulting type non-canonical.
+      AnyNonCanonical = true;
+    }
+    ElaboratedTypeKeyword Keyword =
+        ::getCanonicalElaboratedTypeKeyword(TT->getKeyword());
+    // FIXME: Implement getFunctionallyEquivalentCanonicalTemplateName and use
+    // it here.
+    TemplateName TN =
+        getCanonicalTemplateName(TT->getTemplateName(), /*IgnoreDeduced=*/true);
+    // FIXME: We can't avoid rebuilding if nothing changed, because we can't
+    // rely on this TST to have been uniqued.
+    bool AnyChanged = false;
+    auto As = ::getCanonicalTemplateArguments(
+        *this, TT->template_arguments(), AnyChanged,
+        /*FunctionallyEquivalent=*/true, AnyNonCanonical);
+    if (!AnyNonCanonical)
+      break;
+    return getTemplateSpecializationType(
+        Keyword, TN, As,
+        /*CanonicalArgs=*/ArrayRef<TemplateArgument>(),
+        TT->desugar().getCanonicalType(),
+        /*Unique=*/true);
+  }
+  case Type::Decltype: {
+    const auto *TT = cast<DecltypeType>(T);
+    AnyNonCanonical |= TT->isSugared();
+    if (!AnyNonCanonical)
+      break;
+    return QualType(TT, 0);
+  }
+  // These types don't have other types in their spelling, so they always
+  // canonicalize to the equivalent form.
+  case Type::Typedef:
+  case Type::SubstTemplateTypeParm:
+  case Type::TemplateTypeParm:
+    break;
+  }
+  return T->getCanonicalTypeInternal();
+}
+
+bool ASTContext::hasFunctionallyEquivalentType(QualType T1, QualType T2) const {
+  return hasSameType(T1, T2) &&
+         getCanonicalType(T1, /*FunctionallyEquivalent=*/true) ==
+             getCanonicalType(T2, /*FunctionallyEquivalent=*/true);
 }
 
 bool ASTContext::hasSameExpr(const Expr *X, const Expr *Y) const {

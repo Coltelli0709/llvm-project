@@ -7496,7 +7496,8 @@ public:
   void Profile(llvm::FoldingSetNodeID &ID, const ASTContext &Ctx);
   static void Profile(llvm::FoldingSetNodeID &ID, ElaboratedTypeKeyword Keyword,
                       TemplateName T, ArrayRef<TemplateArgument> Args,
-                      QualType Underlying, const ASTContext &Context);
+                      bool IsTypeAlias, QualType Underlying,
+                      const ASTContext &Context);
 
   static bool classof(const Type *T) {
     return T->getTypeClass() == TemplateSpecialization;
