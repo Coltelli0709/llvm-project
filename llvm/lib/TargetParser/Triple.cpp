@@ -1144,6 +1144,13 @@ Triple::Triple(const Twine &ArchStr, const Twine &VendorStr, const Twine &OSStr,
     ObjectFormat = getDefaultFormat(*this);
 }
 
+Triple::Triple(ArchType A, SubArchType SA, VendorType V, OSType OS,
+               EnvironmentType E, ObjectFormatType OF)
+    : Triple(getArchName(A, SA), getVendorTypeName(V), getOSTypeName(OS),
+             getEnvironmentTypeName(E)) {
+  setObjectFormat(OF);
+}
+
 static VersionTuple parseVersionFromName(StringRef Name);
 
 static StringRef getDXILArchNameFromShaderModel(StringRef ShaderModelStr) {

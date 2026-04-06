@@ -1477,6 +1477,46 @@ TEST(TripleTest, ParsedIDs) {
   EXPECT_EQ(Triple::ChipStar, T.getOS());
 }
 
+TEST(TripleTest, EnumConstructor) {
+  {
+    Triple T(Triple::amdgcn, Triple::NoSubArch, Triple::AMD, Triple::AMDHSA,
+             Triple::LLVM, Triple::ELF);
+    EXPECT_EQ(T.getArch(), Triple::amdgcn);
+    EXPECT_EQ(T.getVendor(), Triple::AMD);
+    EXPECT_EQ(T.getOS(), Triple::AMDHSA);
+    EXPECT_EQ(T.getEnvironment(), Triple::LLVM);
+    EXPECT_EQ(T.getObjectFormat(), Triple::ELF);
+  }
+
+  {
+    Triple T(Triple::arm, Triple::ARMSubArch_v9_7a, Triple::PC, Triple::Linux,
+             Triple::GNU, Triple::COFF);
+    EXPECT_EQ(T.getArch(), Triple::arm);
+    EXPECT_EQ(T.getVendor(), Triple::PC);
+    EXPECT_EQ(T.getOS(), Triple::Linux);
+    EXPECT_EQ(T.getEnvironment(), Triple::GNU);
+    EXPECT_EQ(T.getObjectFormat(), Triple::COFF);
+  }
+
+  {
+    Triple T(Triple::x86_64);
+    EXPECT_EQ(T.getArch(), Triple::x86_64);
+    EXPECT_EQ(T.getVendor(), Triple::UnknownVendor);
+    EXPECT_EQ(T.getOS(), Triple::UnknownOS);
+    EXPECT_EQ(T.getEnvironment(), Triple::UnknownEnvironment);
+    EXPECT_EQ(T.getObjectFormat(), Triple::ELF);
+  }
+
+  {
+    Triple T(Triple::dxil);
+    EXPECT_EQ(T.getArch(), Triple::dxil);
+    EXPECT_EQ(T.getVendor(), Triple::UnknownVendor);
+    EXPECT_EQ(T.getOS(), Triple::UnknownOS);
+    EXPECT_EQ(T.getEnvironment(), Triple::UnknownEnvironment);
+    EXPECT_EQ(T.getObjectFormat(), Triple::DXContainer);
+  }
+}
+
 static std::string Join(StringRef A, StringRef B, StringRef C) {
   std::string Str = std::string(A);
   Str += '-';
