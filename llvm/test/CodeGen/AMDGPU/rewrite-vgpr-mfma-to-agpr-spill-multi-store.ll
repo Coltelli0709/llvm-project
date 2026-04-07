@@ -1,7 +1,7 @@
 ; REQUIRES: asserts
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx90a -O3 \
-; RUN:   -amdgpu-use-amdgpu-trackers=1 --lsr-drop-solution=1 \
-; RUN:   -enable-post-misched=0 -verify-machineinstrs \
+; RUN:   -amdgpu-use-amdgpu-trackers=1 -verify-machineinstrs \
+; RUN:   -stop-after=amdgpu-rewrite-agpr-copy-mfma \
 ; RUN:   -debug-only=amdgpu-rewrite-agpr-copy-mfma %s 2>&1 | FileCheck %s
 
 ; This test verifies that multiple connected live range components are not
