@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
+#include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -5509,7 +5510,7 @@ static MachineBasicBlock *emitIndirectDst(MachineInstr &MI,
   return LoopBB;
 }
 
-static MachineBasicBlock *Expand64BitScalarArithmetic(MachineInstr &MI,
+static MachineBasicBlock *expand64BitScalarArithmetic(MachineInstr &MI,
                                                       MachineBasicBlock *BB) {
   // For targets older than GFX12, we emit a sequence of 32-bit operations.
   // For GFX12, we emit s_add_u64 and s_sub_u64.
@@ -5560,14 +5561,12 @@ static MachineBasicBlock *Expand64BitScalarArithmetic(MachineInstr &MI,
   return BB;
 }
 
-static MachineBasicBlock *Expand64BitV_CND_MASK(MachineInstr &MI,
-                                                MachineBasicBlock *BB) {
+static void expand64BitV_CNDMASK(MachineInstr &MI, MachineBasicBlock *BB) {
   MachineFunction *MF = BB->getParent();
   const GCNSubtarget &ST = MF->getSubtarget<GCNSubtarget>();
   const SIInstrInfo *TII = ST.getInstrInfo();
   const SIRegisterInfo *TRI = ST.getRegisterInfo();
   MachineRegisterInfo &MRI = MF->getRegInfo();
-  const DebugLoc &DL = MI.getDebugLoc();
   Register Dst = MI.getOperand(0).getReg();
   const MachineOperand &Src0 = MI.getOperand(1);
   const MachineOperand &Src1 = MI.getOperand(2);
@@ -5578,10 +5577,14 @@ static MachineBasicBlock *Expand64BitV_CND_MASK(MachineInstr &MI,
   const auto *CondRC = TRI->getWaveMaskRegClass();
   Register SrcCondCopy = MRI.createVirtualRegister(CondRC);
 
+  int Src0Idx =
+      AMDGPU::getNamedOperandIdx(MI.getOpcode(), AMDGPU::OpName::src0);
+  int Src1Idx =
+      AMDGPU::getNamedOperandIdx(MI.getOpcode(), AMDGPU::OpName::src1);
   const TargetRegisterClass *Src0RC =
-      Src0.isReg() ? MRI.getRegClass(Src0.getReg()) : &AMDGPU::VReg_64RegClass;
+      TRI->getAllocatableClass(TII->getRegClass(MI.getDesc(), Src0Idx));
   const TargetRegisterClass *Src1RC =
-      Src1.isReg() ? MRI.getRegClass(Src1.getReg()) : &AMDGPU::VReg_64RegClass;
+      TRI->getAllocatableClass(TII->getRegClass(MI.getDesc(), Src1Idx));
 
   const TargetRegisterClass *Src0SubRC =
       TRI->getSubRegisterClass(Src0RC, AMDGPU::sub0);
@@ -5598,27 +5601,31 @@ static MachineBasicBlock *Expand64BitV_CND_MASK(MachineInstr &MI,
   MachineOperand Src1Sub1 = TII->buildExtractSubRegOrImm(
       MI, MRI, Src1, Src1RC, AMDGPU::sub1, Src1SubRC);
 
-  BuildMI(*BB, MI, DL, TII->get(AMDGPU::COPY), SrcCondCopy).addReg(SrcCond);
-  BuildMI(*BB, MI, DL, TII->get(AMDGPU::V_CNDMASK_B32_e64), DstLo)
+  MachineIRBuilder B(MI);
+  B.buildInstr(AMDGPU::COPY).addDef(SrcCondCopy).addReg(SrcCond);
+  B.buildInstr(AMDGPU::V_CNDMASK_B32_e64)
+      .addDef(DstLo)
       .addImm(0)
       .add(Src0Sub0)
       .addImm(0)
       .add(Src1Sub0)
       .addReg(SrcCondCopy);
-  BuildMI(*BB, MI, DL, TII->get(AMDGPU::V_CNDMASK_B32_e64), DstHi)
+
+  B.buildInstr(AMDGPU::V_CNDMASK_B32_e64)
+      .addDef(DstHi)
       .addImm(0)
       .add(Src0Sub1)
       .addImm(0)
       .add(Src1Sub1)
       .addReg(SrcCondCopy);
 
-  BuildMI(*BB, MI, DL, TII->get(AMDGPU::REG_SEQUENCE), Dst)
+  B.buildInstr(TargetOpcode::REG_SEQUENCE)
+      .addDef(Dst)
       .addReg(DstLo)
       .addImm(AMDGPU::sub0)
       .addReg(DstHi)
       .addImm(AMDGPU::sub1);
   MI.eraseFromParent();
-  return BB;
 }
 
 static uint64_t getIdentityValueForWaveReduction(unsigned Opc) {
@@ -5673,22 +5680,22 @@ static uint64_t getIdentityValueForWaveReduction(unsigned Opc) {
   }
 }
 
-static std::tuple<bool, bool> ClassifyWaveReductionOp(unsigned Opc) {
-  bool is32BitOpc = Opc == AMDGPU::S_MIN_U32 || Opc == AMDGPU::S_MIN_I32 ||
-                    Opc == AMDGPU::S_MAX_U32 || Opc == AMDGPU::S_MAX_I32 ||
-                    Opc == AMDGPU::S_ADD_I32 || Opc == AMDGPU::S_SUB_I32 ||
-                    Opc == AMDGPU::S_AND_B32 || Opc == AMDGPU::S_OR_B32 ||
-                    Opc == AMDGPU::S_XOR_B32 || Opc == AMDGPU::V_MIN_F32_e64 ||
-                    Opc == AMDGPU::V_MAX_F32_e64 ||
-                    Opc == AMDGPU::V_ADD_F32_e64 ||
-                    Opc == AMDGPU::V_SUB_F32_e64;
-  bool isFPOp =
-      Opc == AMDGPU::V_MIN_F32_e64 || Opc == AMDGPU::V_MAX_F32_e64 ||
-      Opc == AMDGPU::V_ADD_F32_e64 || Opc == AMDGPU::V_SUB_F32_e64 ||
-      Opc == AMDGPU::V_MIN_F64_e64 || Opc == AMDGPU::V_MAX_F64_e64 ||
-      Opc == AMDGPU::V_MIN_NUM_F64_e64 || Opc == AMDGPU::V_MAX_NUM_F64_e64 ||
-      Opc == AMDGPU::V_ADD_F64_e64 || Opc == AMDGPU::V_ADD_F64_pseudo_e64;
-  return {is32BitOpc, isFPOp};
+static bool is32bitWaveReduceOperation(unsigned Opc) {
+  return Opc == AMDGPU::S_MIN_U32 || Opc == AMDGPU::S_MIN_I32 ||
+         Opc == AMDGPU::S_MAX_U32 || Opc == AMDGPU::S_MAX_I32 ||
+         Opc == AMDGPU::S_ADD_I32 || Opc == AMDGPU::S_SUB_I32 ||
+         Opc == AMDGPU::S_AND_B32 || Opc == AMDGPU::S_OR_B32 ||
+         Opc == AMDGPU::S_XOR_B32 || Opc == AMDGPU::V_MIN_F32_e64 ||
+         Opc == AMDGPU::V_MAX_F32_e64 || Opc == AMDGPU::V_ADD_F32_e64 ||
+         Opc == AMDGPU::V_SUB_F32_e64;
+}
+
+static bool isFloatingPointWaveReduceOperation(unsigned Opc) {
+  return Opc == AMDGPU::V_MIN_F32_e64 || Opc == AMDGPU::V_MAX_F32_e64 ||
+         Opc == AMDGPU::V_ADD_F32_e64 || Opc == AMDGPU::V_SUB_F32_e64 ||
+         Opc == AMDGPU::V_MIN_F64_e64 || Opc == AMDGPU::V_MAX_F64_e64 ||
+         Opc == AMDGPU::V_MIN_NUM_F64_e64 || Opc == AMDGPU::V_MAX_NUM_F64_e64 ||
+         Opc == AMDGPU::V_ADD_F64_e64 || Opc == AMDGPU::V_ADD_F64_pseudo_e64;
 }
 
 static std::tuple<unsigned, unsigned>
@@ -5734,7 +5741,7 @@ getDPPOpcForWaveReduction(unsigned Opc, const GCNSubtarget &ST) {
   default:
     llvm_unreachable("unhandled lane op");
   }
-  bool isFPOp = std::get<1>(ClassifyWaveReductionOp(Opc));
+  bool isFPOp = isFloatingPointWaveReduceOperation(Opc);
   unsigned ClampOpc = Opc;
   if (!isFPOp) {
     if (Opc == AMDGPU::S_SUB_I32)
@@ -5760,15 +5767,15 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
   unsigned Stratergy = static_cast<unsigned>(MI.getOperand(2).getImm());
   enum WAVE_REDUCE_STRATEGY : unsigned { DEFAULT = 0, ITERATIVE = 1, DPP = 2 };
   MachineBasicBlock *RetBB = nullptr;
-  auto ExtractSubRegs = [&](MachineInstr &MI, MachineOperand &Op,
-                            const TargetRegisterClass *SrcRC)
-      -> std::tuple<MachineOperand, MachineOperand> {
+  auto ExtractSubRegs =
+      [&](MachineInstr &MI, MachineOperand &Op,
+          const TargetRegisterClass *SrcRC) -> std::pair<Register, Register> {
     const TargetRegisterClass *SrcSubRC =
         TRI->getSubRegisterClass(SrcRC, AMDGPU::sub0);
-    MachineOperand Op1L = TII->buildExtractSubRegOrImm(MI, MRI, Op, SrcRC,
-                                                       AMDGPU::sub0, SrcSubRC);
-    MachineOperand Op1H = TII->buildExtractSubRegOrImm(MI, MRI, Op, SrcRC,
-                                                       AMDGPU::sub1, SrcSubRC);
+    Register Op1L =
+        TII->buildExtractSubReg(MI, MRI, Op, SrcRC, AMDGPU::sub0, SrcSubRC);
+    Register Op1H =
+        TII->buildExtractSubReg(MI, MRI, Op, SrcRC, AMDGPU::sub1, SrcSubRC);
     return {Op1L, Op1H};
   };
   auto BuildRegSequence = [&](MachineBasicBlock &BB,
@@ -5866,10 +5873,10 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
           auto [Op1L, Op1H] =
               ExtractSubRegs(MI, MI.getOperand(1), MRI.getRegClass(SrcReg));
           BuildMI(BB, MI, DL, TII->get(AMDGPU::S_MUL_I32), DestSub0)
-              .add(Op1L)
+              .addReg(Op1L)
               .addReg(ParityRegister);
           BuildMI(BB, MI, DL, TII->get(AMDGPU::S_MUL_I32), DestSub1)
-              .add(Op1H)
+              .addReg(Op1H)
               .addReg(ParityRegister);
           BuildRegSequence(BB, MI, DstReg, DestSub0, DestSub1);
         }
@@ -5919,20 +5926,20 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
               .addImm(31)
               .setOperandDead(3); // Dead scc
           BuildMI(BB, MI, DL, TII->get(AMDGPU::S_MUL_I32), Op1L_Op0H_Reg)
-              .add(Op1L)
+              .addReg(Op1L)
               .addReg(NegatedValHi);
         }
         Register LowOpcode = Opc == AMDGPU::S_SUB_U64_PSEUDO
                                  ? NegatedValLo
                                  : NewAccumulator->getOperand(0).getReg();
         BuildMI(BB, MI, DL, TII->get(AMDGPU::S_MUL_I32), DestSub0)
-            .add(Op1L)
+            .addReg(Op1L)
             .addReg(LowOpcode);
         BuildMI(BB, MI, DL, TII->get(AMDGPU::S_MUL_HI_U32), CarryReg)
-            .add(Op1L)
+            .addReg(Op1L)
             .addReg(LowOpcode);
         BuildMI(BB, MI, DL, TII->get(AMDGPU::S_MUL_I32), Op1H_Op0L_Reg)
-            .add(Op1H)
+            .addReg(Op1H)
             .addReg(LowOpcode);
 
         Register HiVal = Opc == AMDGPU::S_SUB_U64_PSEUDO ? AddReg : DestSub1;
@@ -5954,7 +5961,7 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
       case AMDGPU::V_ADD_F64_e64:
       case AMDGPU::V_ADD_F64_pseudo_e64:
       case AMDGPU::V_SUB_F32_e64: {
-        bool is32BitOpc = std::get<0>(ClassifyWaveReductionOp(Opc));
+        bool is32BitOpc = is32bitWaveReduceOperation(Opc);
         const TargetRegisterClass *VregRC = TII->getRegClass(TII->get(Opc), 0);
         Register ActiveLanesVreg = MRI.createVirtualRegister(VregRC);
         Register DstVreg = MRI.createVirtualRegister(VregRC);
@@ -5998,10 +6005,10 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
           // lane value input should be in an sgpr
           BuildMI(BB, MI, DL, TII->get(AMDGPU::V_READFIRSTLANE_B32),
                   LaneValueLoReg)
-              .add(Op1L);
+              .addReg(Op1L);
           BuildMI(BB, MI, DL, TII->get(AMDGPU::V_READFIRSTLANE_B32),
                   LaneValueHiReg)
-              .add(Op1H);
+              .addReg(Op1H);
           NewAccumulator =
               BuildRegSequence(BB, MI, DstReg, LaneValueLoReg, LaneValueHiReg);
         }
@@ -6013,7 +6020,8 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
   } else {
     MachineBasicBlock::iterator I = BB.end();
     Register SrcReg = MI.getOperand(1).getReg();
-    auto [is32BitOpc, isFPOp] = ClassifyWaveReductionOp(Opc);
+    bool is32BitOpc = is32bitWaveReduceOperation(Opc);
+    bool isFPOp = isFloatingPointWaveReduceOperation(Opc);
     // Create virtual registers required for lowering.
     const TargetRegisterClass *WaveMaskRegClass = TRI->getWaveMaskRegClass();
     const TargetRegisterClass *DstRegClass = MRI.getRegClass(DstReg);
@@ -6119,11 +6127,11 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
         // lane value input should be in an sgpr
         BuildMI(*ComputeLoop, I, DL, TII->get(AMDGPU::V_READLANE_B32),
                 LaneValueLoReg)
-            .add(Op1L)
+            .addReg(Op1L)
             .addReg(FF1Reg);
         BuildMI(*ComputeLoop, I, DL, TII->get(AMDGPU::V_READLANE_B32),
                 LaneValueHiReg)
-            .add(Op1H)
+            .addReg(Op1H)
             .addReg(FF1Reg);
         auto LaneValue = BuildRegSequence(*ComputeLoop, I, LaneValReg,
                                           LaneValueLoReg, LaneValueHiReg);
@@ -6151,8 +6159,8 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
           Register AccumulatorVReg = MRI.createVirtualRegister(VregClass);
           auto [SrcReg0Sub0, SrcReg0Sub1] =
               ExtractSubRegs(MI, Accumulator->getOperand(0), VregClass);
-          BuildRegSequence(*ComputeLoop, I, AccumulatorVReg,
-                           SrcReg0Sub0.getReg(), SrcReg0Sub1.getReg());
+          BuildRegSequence(*ComputeLoop, I, AccumulatorVReg, SrcReg0Sub0,
+                           SrcReg0Sub1);
           BuildMI(*ComputeLoop, I, DL, TII->get(Opc), LaneMaskReg)
               .addReg(LaneValue->getOperand(0).getReg())
               .addReg(AccumulatorVReg);
@@ -6207,8 +6215,8 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
           MachineBasicBlock::iterator Iters = *ReadLaneLo;
           auto [Op1L, Op1H] =
               ExtractSubRegs(*Iters, DstVregInst->getOperand(0), VregRC);
-          ReadLaneLo.add(Op1L);
-          ReadLaneHi.add(Op1H);
+          ReadLaneLo.addReg(Op1L);
+          ReadLaneHi.addReg(Op1H);
           NewAccumulator =
               BuildRegSequence(*ComputeLoop, I, DstReg, LaneValLo, LaneValHi);
           break;
@@ -6219,7 +6227,7 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
                                .addReg(Accumulator->getOperand(0).getReg())
                                .addReg(LaneValue->getOperand(0).getReg());
           ComputeLoop =
-              Expand64BitScalarArithmetic(*NewAccumulator, ComputeLoop);
+              expand64BitScalarArithmetic(*NewAccumulator, ComputeLoop);
           break;
         }
         }
@@ -6525,7 +6533,7 @@ SITargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   }
   case AMDGPU::S_ADD_U64_PSEUDO:
   case AMDGPU::S_SUB_U64_PSEUDO: {
-    return Expand64BitScalarArithmetic(MI, BB);
+    return expand64BitScalarArithmetic(MI, BB);
   }
   case AMDGPU::V_ADD_U64_PSEUDO:
   case AMDGPU::V_SUB_U64_PSEUDO: {
@@ -6789,7 +6797,8 @@ SITargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   case AMDGPU::SI_KILL_I1_PSEUDO:
     return splitKillBlock(MI, BB);
   case AMDGPU::V_CNDMASK_B64_PSEUDO: {
-    return Expand64BitV_CND_MASK(MI, BB);
+    expand64BitV_CNDMASK(MI, BB);
+    return BB;
   }
   case AMDGPU::SI_BR_UNDEF: {
     MachineInstr *Br = BuildMI(*BB, MI, DL, TII->get(AMDGPU::S_CBRANCH_SCC1))
