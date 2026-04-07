@@ -6275,7 +6275,9 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
           .addImm(IdentityValue);
       BuildMI(BB, MI, DL, TII->get(AMDGPU::COPY), IdentityVGPR)
           .addReg(IdentitySGPR);
-      auto [DPPOpc, ClampOpc] = getDPPOpcForWaveReduction(Opc, ST);
+      auto DPPClampOpcPair = getDPPOpcForWaveReduction(Opc, ST);
+      unsigned DPPOpc = std::get<0>(DPPClampOpcPair);
+      unsigned ClampOpc = std::get<1>(DPPClampOpcPair);
       auto BuildSetInactiveInstr = [&](Register Dst, Register Src0,
                                        Register Src1) {
         return BuildMI(BB, MI, DL, TII->get(AMDGPU::V_SET_INACTIVE_B32),
