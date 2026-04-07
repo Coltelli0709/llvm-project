@@ -1,11 +1,15 @@
+; REQUIRES: asserts
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx90a -O3 \
 ; RUN:   -amdgpu-use-amdgpu-trackers=1 --lsr-drop-solution=1 \
-; RUN:   -enable-post-misched=0 -verify-machineinstrs -o - %s 2>&1 | FileCheck %s
-; CHECK-NOT: Bad machine code: Multiple connected components in live interval
+; RUN:   -enable-post-misched=0 -verify-machineinstrs \
+; RUN:   -debug-only=amdgpu-rewrite-agpr-copy-mfma %s 2>&1 | FileCheck %s
 
 ; This test verifies that multiple connected live range components are not
 ; created by the VGPR-to-AGPR MFMA rewrite pass. If multiple components exist,
-; the verifier would error out.
+; the verifier would error out. Check that the unspilled interval was split
+; into separate components.
+
+; CHECK: Split unspilled interval into {{[0-9]+}} components
 
 define amdgpu_kernel void @multi_store_spill_slot() #0 {
 entry:
