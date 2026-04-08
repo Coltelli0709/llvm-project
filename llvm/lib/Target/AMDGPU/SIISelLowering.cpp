@@ -32,7 +32,6 @@
 #include "llvm/CodeGen/GlobalISel/GISelValueTracking.h"
 #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
-#include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -5567,6 +5566,7 @@ static void expand64BitV_CNDMASK(MachineInstr &MI, MachineBasicBlock *BB) {
   const SIInstrInfo *TII = ST.getInstrInfo();
   const SIRegisterInfo *TRI = ST.getRegisterInfo();
   MachineRegisterInfo &MRI = MF->getRegInfo();
+  const DebugLoc &DL = MI.getDebugLoc();
   Register Dst = MI.getOperand(0).getReg();
   const MachineOperand &Src0 = MI.getOperand(1);
   const MachineOperand &Src1 = MI.getOperand(2);
@@ -5601,26 +5601,22 @@ static void expand64BitV_CNDMASK(MachineInstr &MI, MachineBasicBlock *BB) {
   MachineOperand Src1Sub1 = TII->buildExtractSubRegOrImm(
       MI, MRI, Src1, Src1RC, AMDGPU::sub1, Src1SubRC);
 
-  MachineIRBuilder B(MI);
-  B.buildInstr(AMDGPU::COPY).addDef(SrcCondCopy).addReg(SrcCond);
-  B.buildInstr(AMDGPU::V_CNDMASK_B32_e64)
-      .addDef(DstLo)
+  BuildMI(*BB, MI, DL, TII->get(AMDGPU::COPY), SrcCondCopy).addReg(SrcCond);
+  BuildMI(*BB, MI, DL, TII->get(AMDGPU::V_CNDMASK_B32_e64), DstLo)
       .addImm(0)
       .add(Src0Sub0)
       .addImm(0)
       .add(Src1Sub0)
       .addReg(SrcCondCopy);
 
-  B.buildInstr(AMDGPU::V_CNDMASK_B32_e64)
-      .addDef(DstHi)
+  BuildMI(*BB, MI, DL, TII->get(AMDGPU::V_CNDMASK_B32_e64), DstHi)
       .addImm(0)
       .add(Src0Sub1)
       .addImm(0)
       .add(Src1Sub1)
       .addReg(SrcCondCopy);
 
-  B.buildInstr(TargetOpcode::REG_SEQUENCE)
-      .addDef(Dst)
+  BuildMI(*BB, MI, DL, TII->get(AMDGPU::REG_SEQUENCE), Dst)
       .addReg(DstLo)
       .addImm(AMDGPU::sub0)
       .addReg(DstHi)
