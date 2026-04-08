@@ -6319,8 +6319,7 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
       };
 
       // Set inactive lanes to the identity value.
-      MachineInstr *SrcWithIdentityInstr =
-          BuildSetInactiveInstr(SrcWithIdentity, SrcReg, IdentityVGPR);
+      BuildSetInactiveInstr(SrcWithIdentity, SrcReg, IdentityVGPR);
 
       // DPP reduction
       BuildDPPMachineInstr(DPPRowShr1, SrcWithIdentity,
