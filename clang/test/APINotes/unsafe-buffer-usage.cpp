@@ -21,6 +21,9 @@
 
 // CHECK-ANNO: FunctionDecl {{.+}} annotatedUnsafeFunc
 // CHECK-ANNO: UnsafeBufferUsageAttr
+// CHECK-ANNO-NOT: UnsafeBufferUsageAttr
+// CHECK-ANNO: FunctionDecl {{.+}} annotatedUnsafeFunc
+
 // CHECK-ANNO-FALSE: FunctionDecl {{.+}} falseAPINotesButAnnotatedUnsafeFunc
 // CHECK-ANNO-FALSE: UnsafeBufferUsageAttr
 

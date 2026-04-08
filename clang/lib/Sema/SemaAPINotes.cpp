@@ -13,6 +13,7 @@
 #include "TypeLocBuilder.h"
 #include "clang/APINotes/APINotesReader.h"
 #include "clang/APINotes/Types.h"
+#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
@@ -579,7 +580,7 @@ static void ProcessAPINotes(Sema &S, FunctionOrMethod AnyFunc,
     applyNullability(S, D, Info.getReturnTypeInfo(), Metadata);
 
   // Add [[clang::unsafe_buffer_usage]]
-  if (Info.UnsafeBufferUsage) {
+  if (Info.UnsafeBufferUsage && !D->getAttr<UnsafeBufferUsageAttr>()) {
     handleAPINotedAttribute<UnsafeBufferUsageAttr>(S, D, true, Metadata, [&]() {
       return UnsafeBufferUsageAttr::Create(S.getASTContext(),
                                            getPlaceholderAttrInfo());
