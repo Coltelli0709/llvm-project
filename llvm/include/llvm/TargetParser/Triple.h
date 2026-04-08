@@ -376,9 +376,11 @@ public:
   LLVM_ABI Triple(const Twine &ArchStr, const Twine &VendorStr,
                   const Twine &OSStr, const Twine &EnvironmentStr);
   LLVM_ABI Triple(ArchType A, SubArchType SA = NoSubArch,
-                  VendorType V = UnknownVendor, OSType OS = UnknownOS,
-                  EnvironmentType E = UnknownEnvironment,
-                  ObjectFormatType OF = UnknownObjectFormat);
+                  VendorType V = UnknownVendor, OSType OS = UnknownOS);
+  LLVM_ABI Triple(ArchType A, SubArchType SA, VendorType V, OSType OS,
+                  EnvironmentType E);
+  LLVM_ABI Triple(ArchType A, SubArchType SA, VendorType V, OSType OS,
+                  EnvironmentType E, ObjectFormatType OF);
 
   bool operator==(const Triple &Other) const {
     return Arch == Other.Arch && SubArch == Other.SubArch &&
