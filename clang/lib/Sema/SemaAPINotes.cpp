@@ -13,7 +13,6 @@
 #include "TypeLocBuilder.h"
 #include "clang/APINotes/APINotesReader.h"
 #include "clang/APINotes/Types.h"
-#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
