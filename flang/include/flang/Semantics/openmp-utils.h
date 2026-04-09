@@ -242,6 +242,13 @@ std::optional<int64_t> GetMinimumSequenceCount(
 std::optional<int64_t> GetMinimumSequenceCount(
     std::optional<std::pair<int64_t, int64_t>> range);
 
+/// Collect the set of DO loops present in the source code that are directly
+/// affected by the given loop construct. This does not include any DO loops
+/// that are affected by any construct nested in `x`.
+std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
+    const parser::OpenMPLoopConstruct &x, unsigned version,
+    SemanticsContext *semaCtx = nullptr);
+
 struct LoopSequence {
   LoopSequence(const parser::ExecutionPartConstruct &root, unsigned version,
       bool allowAllLoops = false, SemanticsContext *semaCtx = nullptr);
