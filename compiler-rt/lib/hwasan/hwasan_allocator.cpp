@@ -153,7 +153,8 @@ void HwasanAllocatorInit() {
       common_flags()->allocator_release_to_os_interval_ms,
       GetAliasRegionStart());
   for (uptr i = 0; i < sizeof(tail_magic); i++)
-    tail_magic[i] = GetCurrentThread()->GenerateRandomTag();
+    tail_magic[i] = GetCurrentThread()->GenerateRandomTag(
+        flags()->non_negative_pointers && kTagBits > 7 ? 7 : kTagBits);
   if (common_flags()->max_allocation_size_mb) {
     max_malloc_size = common_flags()->max_allocation_size_mb << 20;
     max_malloc_size = Min(max_malloc_size, kMaxAllowedMallocSize);
@@ -237,7 +238,10 @@ static void *HwasanAllocate(StackTrace *stack, uptr orig_size, uptr alignment,
   if (InTaggableRegion(reinterpret_cast<uptr>(user_ptr)) &&
       atomic_load_relaxed(&hwasan_allocator_tagging_enabled) &&
       flags()->tag_in_malloc && malloc_bisect(stack, orig_size)) {
-    tag_t tag = t ? t->GenerateRandomTag() : kFallbackAllocTag;
+    tag_t tag =
+        t ? t->GenerateRandomTag(
+                flags()->non_negative_pointers && kTagBits > 7 ? 7 : kTagBits)
+          : kFallbackAllocTag;
     uptr tag_size = orig_size ? orig_size : 1;
     uptr full_granule_size = RoundDownTo(tag_size, kShadowAlignment);
     user_ptr = (void *)TagMemoryAligned((uptr)user_ptr, full_granule_size, tag);
