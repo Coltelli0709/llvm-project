@@ -13057,7 +13057,7 @@ MachineBasicBlock *PPCTargetLowering::EmitAtomicBinary(MachineInstr &MI,
   // CmpOpcode != 0: Handles atomic load with MIN/MAX etc.
   // BinOpcode == 0 && CmpOpcode == 0: Handles ATOMIC_SWAP.
   const TargetInstrInfo *TII = Subtarget.getInstrInfo();
-  unsigned AtomicSize = MI.getOperand(MI.getNumExplicitOperands() - 1).getImm();
+  unsigned AtomicSize = MI.getOperand(3).getImm();
 
   auto LoadMnemonic = PPC::LDARX;
   auto StoreMnemonic = PPC::STDCX;
@@ -13091,7 +13091,7 @@ MachineBasicBlock *PPCTargetLowering::EmitAtomicBinary(MachineInstr &MI,
   Register dest = MI.getOperand(0).getReg();
   Register ptrA = MI.getOperand(1).getReg();
   Register ptrB = MI.getOperand(2).getReg();
-  Register incr = MI.getOperand(3).getReg();
+  Register incr = MI.getOperand(4).getReg();
   DebugLoc dl = MI.getDebugLoc();
 
   MachineBasicBlock *loopMBB = F->CreateMachineBasicBlock(LLVM_BB);
@@ -13241,17 +13241,16 @@ MachineBasicBlock *PPCTargetLowering::EmitPartwordAtomicBinary(
   DebugLoc dl = MI.getDebugLoc();
   MachineFunction *F = BB->getParent();
   MachineRegisterInfo &RegInfo = F->getRegInfo();
-  Register incr = MI.getOperand(3).getReg();
+  Register incr = MI.getOperand(4).getReg();
   bool IsSignExtended =
       incr.isVirtual() && isSignExtended(*RegInfo.getVRegDef(incr), TII);
 
-  const bool is8bit =
-      MI.getOperand(MI.getNumExplicitOperands() - 1).getImm() == 1;
+  const bool is8bit = MI.getOperand(3).getImm() == 1;
   if (CmpOpcode == PPC::CMPW && !IsSignExtended) {
     Register ValueReg = RegInfo.createVirtualRegister(&PPC::GPRCRegClass);
     BuildMI(*BB, MI, dl, TII->get(is8bit ? PPC::EXTSB : PPC::EXTSH), ValueReg)
-        .addReg(MI.getOperand(3).getReg());
-    MI.getOperand(3).setReg(ValueReg);
+        .addReg(MI.getOperand(4).getReg());
+    MI.getOperand(4).setReg(ValueReg);
     incr = ValueReg;
   }
   // If we support part-word atomic mnemonics, just use them
