@@ -1577,8 +1577,8 @@ void SIRegisterInfo::buildSpillLoadStore(
   // eg: SPILL_V160 $vgpr1_vgpr2_vgpr3_vgpr4_vgpr5 will be spilt as:
   // SPILL_SCRATCH_DWORD $vgpr1
   // SPILL_SCRATCH_DWORD $vgpr2_vgpr3_vgpr4_vgpr5
-  unsigned LastChunk = ((RemSize / 4) + 3) % 4;
-  if (IsRegMisaligned && (LastChunk = (LastChunk * 4)))
+  unsigned LastChunk = (((RemSize / 4) + 3) % 4) * 4;
+  if (IsRegMisaligned && LastChunk)
     NumSubRegs += 1;
   unsigned NumRemSubRegs = RemSize ? 1 : 0;
   int64_t Offset = InstOffset + MFI.getObjectOffset(Index);
@@ -1748,19 +1748,16 @@ void SIRegisterInfo::buildSpillLoadStore(
         // For misaligned register tuples, spill only the first sub-reg in the
         // first iteration.
         EltSize = 4u;
-        LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
       } else if (i == 1) {
         // The first sub-reg was spilt in the previous iteration.
         EltSize = RegWidth <= 16 ? RegWidth - 4u : 16u;
-        LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
-      } else if (LastChunk && (i + 1) == e) {
+      } else if (LastChunk && (i + 1) == e)
         EltSize = LastChunk;
-        LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
-      }
     } else if (i == NumSubRegs) {
       EltSize = RemSize;
-      LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
     }
+    if (i == NumSubRegs || IsRegMisaligned)
+      LoadStoreOp = getFlatScratchSpillOpcode(TII, LoadStoreOp, EltSize);
     Desc = &TII->get(LoadStoreOp);
 
     if (!IsFlat && UseVGPROffset) {
