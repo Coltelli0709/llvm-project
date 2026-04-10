@@ -1766,6 +1766,28 @@ llvm.func @_QPomp_atomic_capture_complex() {
 
 // -----
 
+// CHECK-LABEL: define void @omp_atomic_capture_complex_swap
+llvm.func @omp_atomic_capture_complex_swap(%x_arg: !llvm.ptr, %v_arg: !llvm.ptr) {
+    // CHECK: %[[ATOMIC_TEMP_LOAD:.*]] = alloca { float, float }, align 8
+    // CHECK: %[[X_NEW_VAL:.*]] = alloca { float, float }, align 8
+    // CHECK: call void @__atomic_load(i64 8, ptr %{{.*}}, ptr %[[ATOMIC_TEMP_LOAD]], i32 0)
+    // CHECK: %[[PHI:.*]] = phi { float, float }
+    // CHECK: store { float, float } { float 1.000000e+00, float 1.000000e+00 }, ptr %[[X_NEW_VAL]], align 4
+    // CHECK: call i1 @__atomic_compare_exchange(i64 8, ptr %{{.*}}, ptr %[[ATOMIC_TEMP_LOAD]], ptr %[[X_NEW_VAL]], i32 2, i32 2)
+    // CHECK: store { float, float } %[[PHI]], ptr %{{.*}}, align 4
+    %0 = llvm.mlir.constant(1.000000e+00 : f32) : f32
+    %1 = llvm.mlir.undef : !llvm.struct<(f32, f32)>
+    %2 = llvm.insertvalue %0, %1[0] : !llvm.struct<(f32, f32)>
+    %3 = llvm.insertvalue %0, %2[1] : !llvm.struct<(f32, f32)>
+    omp.atomic.capture {
+      omp.atomic.read %v_arg = %x_arg : !llvm.ptr, !llvm.ptr, !llvm.struct<(f32, f32)>
+      omp.atomic.write %x_arg = %3 : !llvm.ptr, !llvm.struct<(f32, f32)>
+    }
+    llvm.return
+}
+
+// -----
+
 // CHECK-LABEL: define void @omp_atomic_read_complex() {
 llvm.func @omp_atomic_read_complex(){
 
