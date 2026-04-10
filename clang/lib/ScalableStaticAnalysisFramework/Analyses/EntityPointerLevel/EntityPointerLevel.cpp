@@ -8,7 +8,6 @@
 #include "clang/ScalableStaticAnalysisFramework/Analyses/EntityPointerLevel/EntityPointerLevel.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
-#include "clang/AST/DeclCXX.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/ScalableStaticAnalysisFramework/Analyses/EntityPointerLevel/EntityPointerLevelFormat.h"
 #include "clang/ScalableStaticAnalysisFramework/Core/ASTEntityMapping.h"
@@ -17,6 +16,12 @@
 
 using namespace clang;
 using namespace ssaf;
+
+template <typename DeclOrExpr>
+static bool hasPtrOrArrType(const DeclOrExpr &E) {
+  return llvm::isa<PointerType>(E.getType().getCanonicalType()) ||
+         llvm::isa<ArrayType>(E.getType().getCanonicalType());
+}
 
 template <typename NodeTy, typename... Ts>
 static inline llvm::Error makeErrAtNode(ASTContext &Ctx, const NodeTy &N,
@@ -32,12 +37,6 @@ static inline llvm::Error makeEntityNameErr(ASTContext &Ctx,
                                             const NamedDecl &D) {
   return makeErrAtNode(Ctx, D, "failed to create entity name for %s",
                        D.getNameAsString().data());
-}
-
-template <typename DeclOrExpr>
-static bool hasPtrOrArrType(const DeclOrExpr &E) {
-  return llvm::isa<PointerType>(E.getType().getCanonicalType()) ||
-         llvm::isa<ArrayType>(E.getType().getCanonicalType());
 }
 
 // Translate a pointer type expression 'E' to a (set of) EntityPointerLevel(s)
@@ -59,7 +58,7 @@ static bool hasPtrOrArrType(const DeclOrExpr &E) {
 //   Translate(arr[5])             -> {(arr, 2)}
 //   Translate(cond ? p1[5] : p2)  -> {(p1, 2), (p2, 1)}
 //   Translate(&arr[5])            -> {(arr, 1)}
-class clang::ssaf::EntityPointerLevelTranslator
+class ssaf::EntityPointerLevelTranslator
     : public ConstStmtVisitor<EntityPointerLevelTranslator,
                               Expected<EntityPointerLevelSet>> {
   friend class StmtVisitorBase;
