@@ -1582,6 +1582,9 @@ public:
   unsigned getInstBundleSize(const MachineInstr &MI) const;
   unsigned getInstSizeInBytes(const MachineInstr &MI) const override;
 
+  InstSizeVerifyMode
+  getInstSizeVerifyMode(const MachineInstr &MI) const override;
+
   bool mayAccessFlatAddressSpace(const MachineInstr &MI) const;
 
   std::pair<unsigned, unsigned>
