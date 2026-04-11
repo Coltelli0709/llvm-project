@@ -11946,7 +11946,7 @@ public:
         unsigned MinID = 0;
         unsigned MaxID = 0;
       };
-      SmallMapVector<size_t, PairInfo, 8> PairCounts;
+      SmallMapVector<std::pair<unsigned, unsigned>, PairInfo, 8> PairCounts;
       unsigned MajID0 = 0, MajID1 = 0;
       for (auto [Idx, V] : enumerate(VL)) {
         SmallVector<Value *> OperandsForValue = getOperands(S, V);
@@ -11960,8 +11960,8 @@ public:
           continue;
         unsigned MinID = std::min(ID0, ID1);
         unsigned MaxID = std::max(ID0, ID1);
-        size_t Key = (static_cast<size_t>(MinID) << 16) | MaxID;
-        auto [It, Inserted] = PairCounts.try_emplace(Key);
+        auto [It, Inserted] =
+            PairCounts.try_emplace(std::make_pair(MinID, MaxID));
         PairInfo &Info = It->second;
         if (Inserted) {
           Info.MinID = MinID;
@@ -11976,7 +11976,8 @@ public:
       // lanes. Select the orientation (original or inverse) that has
       // more votes as the majority pattern.
       unsigned BestCount = 0;
-      for (auto &[Key, Info] : PairCounts) {
+      for (const auto &P : PairCounts) {
+        const PairInfo &Info = P.second;
         unsigned Total = Info.FwdCount + Info.RevCount;
         if (Total > BestCount) {
           BestCount = Total;
