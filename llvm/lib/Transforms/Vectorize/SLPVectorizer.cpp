@@ -11932,12 +11932,75 @@ public:
     if (S.areInstructionsWithCopyableElements()) {
       MainOp = S.getMainOp();
       MainOpcode = S.getOpcode();
+      const bool IsCommutative =
+          isCommutative(MainOp) && MainOp->getNumOperands() == 2;
       Operands.assign(MainOp->getNumOperands(),
                       BoUpSLP::ValueList(VL.size(), nullptr));
+      // Build operands and simultaneously count (ID0, ID1) pair
+      // frequencies for commutative operand normalization. Pairs and
+      // their inverses are tracked under a canonical key so that
+      // (Load, Add) and (Add, Load) contribute to the same bucket.
+      struct PairInfo {
+        unsigned FwdCount = 0;
+        unsigned RevCount = 0;
+        unsigned MinID = 0;
+        unsigned MaxID = 0;
+      };
+      SmallMapVector<size_t, PairInfo, 8> PairCounts;
+      unsigned MajID0 = 0, MajID1 = 0;
       for (auto [Idx, V] : enumerate(VL)) {
         SmallVector<Value *> OperandsForValue = getOperands(S, V);
         for (auto [OperandIdx, Operand] : enumerate(OperandsForValue))
           Operands[OperandIdx][Idx] = Operand;
+        if (!IsCommutative || S.isCopyableElement(V) || isa<PoisonValue>(V))
+          continue;
+        unsigned ID0 = OperandsForValue[0]->getValueID();
+        unsigned ID1 = OperandsForValue[1]->getValueID();
+        if (ID0 == ID1)
+          continue;
+        unsigned MinID = std::min(ID0, ID1);
+        unsigned MaxID = std::max(ID0, ID1);
+        size_t Key = (static_cast<size_t>(MinID) << 16) | MaxID;
+        auto [It, Inserted] = PairCounts.try_emplace(Key);
+        PairInfo &Info = It->second;
+        if (Inserted) {
+          Info.MinID = MinID;
+          Info.MaxID = MaxID;
+        }
+        if (ID0 < ID1)
+          ++Info.FwdCount;
+        else
+          ++Info.RevCount;
+      }
+      // Find the most frequent (ID0, ID1) pair across non-copyable
+      // lanes. Select the orientation (original or inverse) that has
+      // more votes as the majority pattern.
+      unsigned BestCount = 0;
+      for (auto &[Key, Info] : PairCounts) {
+        unsigned Total = Info.FwdCount + Info.RevCount;
+        if (Total > BestCount) {
+          BestCount = Total;
+          if (Info.FwdCount >= Info.RevCount) {
+            MajID0 = Info.MinID;
+            MajID1 = Info.MaxID;
+          } else {
+            MajID0 = Info.MaxID;
+            MajID1 = Info.MinID;
+          }
+        }
+      }
+      // For commutative ops, swap lanes whose operand types are the
+      // exact inverse of the majority pattern, making the non-copyable
+      // lanes consistent.
+      if (BestCount > 0) {
+        for (auto [Idx, V] : enumerate(VL)) {
+          if (S.isCopyableElement(V) || isa<PoisonValue>(V))
+            continue;
+          unsigned ID0 = Operands[0][Idx]->getValueID();
+          unsigned ID1 = Operands[1][Idx]->getValueID();
+          if (ID0 == MajID1 && ID1 == MajID0)
+            std::swap(Operands[0][Idx], Operands[1][Idx]);
+        }
       }
     } else {
       buildOriginalOperands(S, VL, Operands);
