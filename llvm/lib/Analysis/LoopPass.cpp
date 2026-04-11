@@ -131,8 +131,7 @@ bool LPPassManager::runOnFunction(Function &F) {
   LI = &LIWP.getLoopInfo();
   Module &M = *F.getParent();
 #ifndef NDEBUG
-  DominatorTree *DT =
-      &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 #endif
   bool Changed = false;
 
