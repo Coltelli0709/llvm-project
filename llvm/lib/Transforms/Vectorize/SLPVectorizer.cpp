@@ -7793,8 +7793,7 @@ BoUpSLP::LoadsState BoUpSLP::canVectorizeLoads(
         SmallVector<int> ShuffleMask(VL.size());
         const unsigned SliceIdx = SliceStart / VF;
         for (int Idx : seq<int>(VL.size()))
-          ShuffleMask[Idx] =
-              Idx / VF == SliceIdx ? VL.size() + Idx % VF : Idx;
+          ShuffleMask[Idx] = Idx / VF == SliceIdx ? VL.size() + Idx % VF : Idx;
         if (SliceStart > 0)
           VecLdCost +=
               ::getShuffleCost(TTI, TTI::SK_InsertSubvector, VecTy, ShuffleMask,
