@@ -998,7 +998,8 @@ std::pair<WithReason<int64_t>, bool> GetAffectedNestDepthWithReason(
       } else {
         Reason reason;
         reason.Say(spec.DirName().source, MsgClauseAbsentAssume,
-            GetUpperName(llvm::omp::Clause::OMPC_depth, version), "a depth of 2");
+            GetUpperName(llvm::omp::Clause::OMPC_depth, version),
+            "a depth of 2");
         return {{2, std::move(reason)}, true};
       }
       break;
