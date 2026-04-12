@@ -1740,7 +1740,8 @@ static void addNoUndefAttrs(const SCCNodeSet &SCCNodes,
             Attribute Attr = Attrs.getRetAttr(Attribute::Range);
             if (Attr.isValid() &&
                 !Attr.getRange().contains(
-                    computeConstantRange(RetVal, /*ForSigned=*/false)))
+                    computeConstantRange(RetVal, /*ForSigned=*/false,
+                                         SimplifyQuery(F->getDataLayout()))))
               return false;
           }
           return true;

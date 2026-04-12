@@ -3392,11 +3392,13 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
 
     AssumptionCache AC(*F);
     Value *Stride = &*F->arg_begin();
-    ConstantRange CR1 = computeConstantRange(Stride, false, true, &AC, nullptr);
+    SimplifyQuery SQ(M->getDataLayout(), /*DT=*/nullptr, &AC);
+    ConstantRange CR1 = computeConstantRange(Stride, /*ForSigned=*/false, SQ);
     EXPECT_TRUE(CR1.isFullSet());
 
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
-    ConstantRange CR2 = computeConstantRange(Stride, false, true, &AC, I);
+    ConstantRange CR2 = computeConstantRange(Stride, /*ForSigned=*/false,
+                                             SQ.getWithInstruction(I));
     EXPECT_EQ(5, CR2.getLower());
     EXPECT_EQ(10, CR2.getUpper());
   }
@@ -3426,7 +3428,8 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     AssumptionCache AC(*F);
     Value *Stride = &*F->arg_begin();
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
-    ConstantRange CR = computeConstantRange(Stride, false, true, &AC, I);
+    SimplifyQuery SQ(M->getDataLayout(), /*DT=*/nullptr, &AC, /*CxtI=*/I);
+    ConstantRange CR = computeConstantRange(Stride, /*ForSigned=*/false, SQ);
     EXPECT_EQ(99, *CR.getSingleElement());
   }
 
@@ -3464,12 +3467,14 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     AssumptionCache AC(*F);
     Value *Stride = &*F->arg_begin();
     Instruction *GT2 = &findInstructionByName(F, "gt.2");
-    ConstantRange CR = computeConstantRange(Stride, false, true, &AC, GT2);
+    SimplifyQuery SQ(M->getDataLayout(), nullptr, &AC, GT2);
+    ConstantRange CR = computeConstantRange(Stride, /*ForSigned=*/false, SQ);
     EXPECT_EQ(5, CR.getLower());
     EXPECT_EQ(0, CR.getUpper());
 
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
-    ConstantRange CR2 = computeConstantRange(Stride, false, true, &AC, I);
+    ConstantRange CR2 = computeConstantRange(Stride, /*ForSigned=*/false,
+                                             SQ.getWithInstruction(I));
     EXPECT_EQ(50, CR2.getLower());
     EXPECT_EQ(100, CR2.getUpper());
   }
@@ -3497,7 +3502,8 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     Value *Stride = &*F->arg_begin();
 
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
-    ConstantRange CR = computeConstantRange(Stride, false, true, &AC, I);
+    SimplifyQuery SQ(M->getDataLayout(), nullptr, &AC, I);
+    ConstantRange CR = computeConstantRange(Stride, /*ForSigned=*/false, SQ);
     EXPECT_TRUE(CR.isEmptySet());
   }
 
@@ -3525,8 +3531,9 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     Value *X2 = &*std::next(F->arg_begin());
 
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
-    ConstantRange CR1 = computeConstantRange(X1, false, true, &AC, I);
-    ConstantRange CR2 = computeConstantRange(X2, false, true, &AC, I);
+    SimplifyQuery SQ(M->getDataLayout(), nullptr, &AC, I);
+    ConstantRange CR1 = computeConstantRange(X1, /*ForSigned=*/false, SQ);
+    ConstantRange CR2 = computeConstantRange(X2, /*ForSigned=*/false, SQ);
 
     EXPECT_EQ(5, CR1.getLower());
     EXPECT_EQ(0, CR1.getUpper());
@@ -3536,7 +3543,7 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
 
     // Check the depth cutoff results in a conservative result (full set) by
     // passing Depth == MaxDepth == 6.
-    ConstantRange CR3 = computeConstantRange(X2, false, true, &AC, I, nullptr, 6);
+    ConstantRange CR3 = computeConstantRange(X2, /*ForSigned=*/false, SQ, 6);
     EXPECT_TRUE(CR3.isFullSet());
   }
   {
@@ -3557,7 +3564,8 @@ TEST_F(ValueTrackingTest, ComputeConstantRange) {
     Value *X2 = &*std::next(F->arg_begin());
 
     Instruction *I = &findInstructionByName(F, "stride.plus.one");
-    ConstantRange CR1 = computeConstantRange(X2, false, true, &AC, I);
+    SimplifyQuery SQ(M->getDataLayout(), nullptr, &AC, I);
+    ConstantRange CR1 = computeConstantRange(X2, /*ForSigned=*/false, SQ);
     // If we don't know the value of x.2, we don't know the value of x.1.
     EXPECT_TRUE(CR1.isFullSet());
   }
