@@ -1266,9 +1266,9 @@ std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
         --consuming;
       }
     } else if (auto *omp{parser::Unwrap<parser::OpenMPLoopConstruct>(owner)}) {
-      const parser::OmpDirectiveSpecification &spec{omp->BeginDir()};
-      auto [cons, _1]{GetAffectedNestDepthWithReason(spec, version, semaCtx)};
-      auto [prod, _2]{GetGeneratedNestDepthWithReason(spec, version, semaCtx)};
+      const parser::OmpDirectiveSpecification &ods{omp->BeginDir()};
+      auto [cons, _1]{GetAffectedNestDepthWithReason(ods, version, semaCtx)};
+      auto [prod, _2]{GetGeneratedNestDepthWithReason(ods, version, semaCtx)};
       if (!cons || !prod) {
         return;
       }
