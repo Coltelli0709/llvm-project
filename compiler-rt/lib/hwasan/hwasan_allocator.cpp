@@ -29,8 +29,6 @@ static Allocator allocator;
 static AllocatorCache fallback_allocator_cache;
 static SpinMutex fallback_mutex;
 static atomic_uint8_t hwasan_allocator_tagging_enabled;
-static unsigned hwasan_tag_bits;
-static tag_t fallback_alloc_tag;
 
 static constexpr tag_t kFallbackAllocTag = 0xBB & kTagMask;
 static constexpr tag_t kFallbackFreeTag = 0xBC;
@@ -48,6 +46,8 @@ enum {
 // Initialized in HwasanAllocatorInit, an never changed.
 alignas(16) static u8 tail_magic[kShadowAlignment - 1];
 static uptr max_malloc_size;
+static unsigned hwasan_tag_bits;
+static tag_t fallback_alloc_tag;
 
 bool HwasanChunkView::IsAllocated() const {
   return metadata_ && metadata_->IsAllocated();
@@ -151,7 +151,7 @@ void HwasanAllocatorInit() {
   atomic_store_relaxed(&hwasan_allocator_tagging_enabled,
                        !flags()->disable_allocator_tagging);
   int flags_tag_bits = flags()->tag_bits;
-  if (flags_tag_bits < kTagBits && flags_tag_bits > 0)
+  if (flags_tag_bits < static_cast<int>(kTagBits) && flags_tag_bits > 0)
     hwasan_tag_bits = flags_tag_bits;
   else
     hwasan_tag_bits = kTagBits;
