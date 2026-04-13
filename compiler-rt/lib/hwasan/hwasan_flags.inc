@@ -92,5 +92,5 @@ HWASAN_FLAG(
     "Tip: this can be combined with the compiler option, "
     "-hwasan-mapping-offset, to optimize the instrumentation.")
 
-HWASAN_FLAG(bool, non_negative_pointers, false,
+HWASAN_FLAG(int, tag_bits, false,
             "Don't use the top bit of the pointer for tags");
