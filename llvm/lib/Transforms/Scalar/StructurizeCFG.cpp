@@ -724,8 +724,11 @@ void StructurizeCFG::simplifyConditions() {
       }
     }
   }
-  for (auto *I : InstToErase)
+  for (auto *I : InstToErase) {
+    if (UA)
+      UA->eraseValue(I);
     I->eraseFromParent();
+  }
 }
 
 /// Remove all PHI values coming from "From" into "To" and remember
@@ -1011,9 +1014,11 @@ void StructurizeCFG::simplifyAffectedPhis() {
     // to achieve better register pressure.
     Q.CanUseUndef = false;
     for (WeakVH VH : AffectedPhis) {
-      if (auto Phi = dyn_cast_or_null<PHINode>(VH)) {
-        if (auto NewValue = simplifyInstruction(Phi, Q)) {
+      if (PHINode *Phi = dyn_cast_or_null<PHINode>(VH)) {
+        if (Value *NewValue = simplifyInstruction(Phi, Q)) {
           Phi->replaceAllUsesWith(NewValue);
+          if (UA)
+            UA->eraseValue(Phi);
           Phi->eraseFromParent();
           Changed = true;
         }
@@ -1032,6 +1037,8 @@ DebugLoc StructurizeCFG::killTerminator(BasicBlock *BB) {
     delPhiValues(BB, Succ);
 
   DebugLoc DL = Term->getDebugLoc();
+  if (UA)
+    UA->eraseValue(Term);
   Term->eraseFromParent();
   return DL;
 }
@@ -1490,8 +1497,12 @@ PreservedAnalyses StructurizeCFGPass::run(Function &F,
 
     Changed |= SCFG.run(R, DT, TTI);
   }
-  if (!Changed)
-    return PreservedAnalyses::all();
+  if (!Changed) {
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    if (SkipUniformRegions)
+      PA.abandon<UniformityInfoAnalysis>();
+    return PA;
+  }
   PreservedAnalyses PA;
   PA.preserve<DominatorTreeAnalysis>();
   return PA;

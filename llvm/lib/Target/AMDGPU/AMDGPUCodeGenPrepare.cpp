@@ -101,7 +101,7 @@ public:
   const GCNSubtarget &ST;
   const AMDGPUTargetMachine &TM;
   const TargetLibraryInfo *TLI;
-  const UniformityInfo &UA;
+  UniformityInfo &UA;
   const DataLayout &DL;
   SimplifyQuery SQ;
   const bool HasFP32DenormalFlush;
@@ -114,7 +114,7 @@ public:
 
   AMDGPUCodeGenPrepareImpl(Function &F, const AMDGPUTargetMachine &TM,
                            const TargetLibraryInfo *TLI, AssumptionCache *AC,
-                           const DominatorTree *DT, const UniformityInfo &UA)
+                           const DominatorTree *DT, UniformityInfo &UA)
       : F(F), ST(TM.getSubtarget<GCNSubtarget>(F)), TM(TM), TLI(TLI), UA(UA),
         DL(F.getDataLayout()), SQ(DL, TLI, DT, AC),
         HasFP32DenormalFlush(SIModeRegisterDefaults(F, ST).FP32Denormals ==
@@ -301,8 +301,9 @@ bool AMDGPUCodeGenPrepareImpl::run() {
   }
 
   while (!DeadVals.empty()) {
-    if (auto *I = dyn_cast_or_null<Instruction>(DeadVals.pop_back_val()))
-      RecursivelyDeleteTriviallyDeadInstructions(I, TLI);
+    if (Instruction *I = dyn_cast_or_null<Instruction>(DeadVals.pop_back_val()))
+      RecursivelyDeleteTriviallyDeadInstructions(
+          I, TLI, nullptr, [&](Value *V) { UA.eraseValue(V); });
   }
 
   return MadeChange;
@@ -1371,7 +1372,7 @@ Value *AMDGPUCodeGenPrepareImpl::shrinkDivRem64(IRBuilder<> &Builder,
 
 void AMDGPUCodeGenPrepareImpl::expandDivRem64(BinaryOperator &I) const {
   Instruction::BinaryOps Opc = I.getOpcode();
-  // Do the general expansion.
+  UA.eraseValue(&I);
   if (Opc == Instruction::UDiv || Opc == Instruction::SDiv) {
     expandDivisionUpTo64Bits(&I);
     return;
@@ -2272,7 +2273,7 @@ bool AMDGPUCodeGenPrepare::runOnFunction(Function &F) {
       &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
   auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>();
   const DominatorTree *DT = DTWP ? &DTWP->getDomTree() : nullptr;
-  const UniformityInfo &UA =
+  UniformityInfo &UA =
       getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
   return AMDGPUCodeGenPrepareImpl(F, TM, TLI, AC, DT, UA).run();
 }
@@ -2283,10 +2284,13 @@ PreservedAnalyses AMDGPUCodeGenPreparePass::run(Function &F,
   const TargetLibraryInfo *TLI = &FAM.getResult<TargetLibraryAnalysis>(F);
   AssumptionCache *AC = &FAM.getResult<AssumptionAnalysis>(F);
   const DominatorTree *DT = FAM.getCachedResult<DominatorTreeAnalysis>(F);
-  const UniformityInfo &UA = FAM.getResult<UniformityInfoAnalysis>(F);
+  UniformityInfo &UA = FAM.getResult<UniformityInfoAnalysis>(F);
   AMDGPUCodeGenPrepareImpl Impl(F, ATM, TLI, AC, DT, UA);
-  if (!Impl.run())
-    return PreservedAnalyses::all();
+  if (!Impl.run()) {
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    PA.abandon<UniformityInfoAnalysis>();
+    return PA;
+  }
   PreservedAnalyses PA = PreservedAnalyses::none();
   if (!Impl.FlowChanged)
     PA.preserveSet<CFGAnalyses>();
@@ -2312,6 +2316,7 @@ CallInst *AMDGPUCodeGenPrepareImpl::createWorkitemIdX(IRBuilder<> &B) const {
 void AMDGPUCodeGenPrepareImpl::replaceWithWorkitemIdX(Instruction &I) const {
   IRBuilder<> B(&I);
   CallInst *Tid = createWorkitemIdX(B);
+  UA.eraseValue(&I);
   BasicBlock::iterator BI(&I);
   ReplaceInstWithValue(BI, Tid);
 }
@@ -2323,6 +2328,7 @@ void AMDGPUCodeGenPrepareImpl::replaceWithMaskedWorkitemIdX(
   CallInst *Tid = createWorkitemIdX(B);
   Constant *Mask = ConstantInt::get(Tid->getType(), WaveSize - 1);
   Value *AndInst = B.CreateAnd(Tid, Mask);
+  UA.eraseValue(&I);
   BasicBlock::iterator BI(&I);
   ReplaceInstWithValue(BI, AndInst);
 }
@@ -2384,6 +2390,7 @@ bool AMDGPUCodeGenPrepareImpl::visitMbcntHi(IntrinsicInst &I) const {
       // Replace mbcnt.hi(mask, val) with val only when work group size matches
       // wave size (single wave per work group).
       if (*MaybeX == Wave) {
+        UA.eraseValue(&I);
         BasicBlock::iterator BI(&I);
         ReplaceInstWithValue(BI, I.getArgOperand(1));
         return true;

@@ -161,8 +161,10 @@ bool rewritePHIs(Function &F, UniformityInfo &UA, DominatorTree *DT) {
     }
   }
 
-  for (auto *PHI : ToBeDeleted)
+  for (PHINode *PHI : ToBeDeleted) {
+    UA.eraseValue(PHI);
     PHI->eraseFromParent();
+  }
 
   return Changed;
 }
@@ -185,7 +187,9 @@ AMDGPURewriteUndefForPHIPass::run(Function &F, FunctionAnalysisManager &AM) {
     return PA;
   }
 
-  return PreservedAnalyses::all();
+  PreservedAnalyses PA = PreservedAnalyses::all();
+  PA.abandon<UniformityInfoAnalysis>();
+  return PA;
 }
 
 FunctionPass *llvm::createAMDGPURewriteUndefForPHILegacyPass() {

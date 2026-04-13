@@ -66,9 +66,9 @@ public:
   // We can preserve non-critical-edgeness when we unify function exit nodes
   BasicBlock *unifyReturnBlockSet(Function &F, DomTreeUpdater &DTU,
                                   ArrayRef<BasicBlock *> ReturningBlocks,
-                                  StringRef Name);
+                                  UniformityInfo &UA, StringRef Name);
   bool run(Function &F, DominatorTree *DT, const PostDominatorTree &PDT,
-           const UniformityInfo &UA);
+           UniformityInfo &UA);
 };
 
 class AMDGPUUnifyDivergentExitNodes : public FunctionPass {
@@ -135,7 +135,7 @@ static bool isUniformlyReached(const UniformityInfo &UA, BasicBlock &BB) {
 
 BasicBlock *AMDGPUUnifyDivergentExitNodesImpl::unifyReturnBlockSet(
     Function &F, DomTreeUpdater &DTU, ArrayRef<BasicBlock *> ReturningBlocks,
-    StringRef Name) {
+    UniformityInfo &UA, StringRef Name) {
   // Otherwise, we need to insert a new basic block into the function, add a PHI
   // nodes (if the function returns values), and convert all of the return
   // instructions into unconditional branches.
@@ -163,6 +163,7 @@ BasicBlock *AMDGPUUnifyDivergentExitNodesImpl::unifyReturnBlockSet(
       PN->addIncoming(BB->getTerminator()->getOperand(0), BB);
 
     // Remove and delete the return inst.
+    UA.eraseValue(BB->getTerminator());
     BB->getTerminator()->eraseFromParent();
     UncondBrInst::Create(NewRetBlock, BB);
     Updates.emplace_back(DominatorTree::Insert, BB, NewRetBlock);
@@ -172,8 +173,14 @@ BasicBlock *AMDGPUUnifyDivergentExitNodesImpl::unifyReturnBlockSet(
     DTU.applyUpdates(Updates);
   Updates.clear();
 
+  // simplifyCFG may delete instructions from blocks beyond the ones being
+  // simplified, so pre-erase all values from the uniformity set. The analysis
+  // is stale after this pass anyway.
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB)
+      UA.eraseValue(&I);
+
   for (BasicBlock *BB : ReturningBlocks) {
-    // Cleanup possible branch to unconditional branch to the return.
     simplifyCFG(BB, *TTI, RequireAndPreserveDomTree ? &DTU : nullptr,
                 SimplifyCFGOptions().bonusInstThreshold(2));
   }
@@ -223,7 +230,7 @@ static void handleNBranch(Function &F, BasicBlock *BB, Instruction *BI,
 
 bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
                                             const PostDominatorTree &PDT,
-                                            const UniformityInfo &UA) {
+                                            UniformityInfo &UA) {
   if (PDT.root_size() == 0 ||
       (PDT.root_size() == 1 && !isa<UncondBrInst, CondBrInst, CallBrInst>(
                                    PDT.getRoot()->getTerminator())))
@@ -265,7 +272,8 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
         DummyReturnBB = createDummyReturnBlock(F, ReturningBlocks);
 
       BasicBlock *LoopHeaderBB = BI->getSuccessor();
-      BI->eraseFromParent(); // Delete the unconditional branch.
+      UA.eraseValue(BI);
+      BI->eraseFromParent();
       // Add a new conditional branch with a dummy edge to the return block.
       CondBrInst::Create(ConstantInt::getTrue(F.getContext()), LoopHeaderBB,
                          DummyReturnBB, BB);
@@ -294,7 +302,7 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
 
       Updates.reserve(Updates.size() + UnreachableBlocks.size());
       for (BasicBlock *BB : UnreachableBlocks) {
-        // Remove and delete the unreachable inst.
+        UA.eraseValue(BB->getTerminator());
         BB->getTerminator()->eraseFromParent();
         UncondBrInst::Create(UnreachableBlock, BB);
         Updates.emplace_back(DominatorTree::Insert, BB, UnreachableBlock);
@@ -308,7 +316,7 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
 
       Type *RetTy = F.getReturnType();
       Value *RetVal = RetTy->isVoidTy() ? nullptr : PoisonValue::get(RetTy);
-      // Remove and delete the unreachable inst.
+      UA.eraseValue(UnreachableBlock->getTerminator());
       UnreachableBlock->getTerminator()->eraseFromParent();
 
       Function *UnreachableIntrin = Intrinsic::getOrInsertDeclaration(
@@ -340,7 +348,7 @@ bool AMDGPUUnifyDivergentExitNodesImpl::run(Function &F, DominatorTree *DT,
   if (ReturningBlocks.size() == 1)
     return Changed; // Already has a single return block
 
-  unifyReturnBlockSet(F, DTU, ReturningBlocks, "UnifiedReturnBlock");
+  unifyReturnBlockSet(F, DTU, ReturningBlocks, UA, "UnifiedReturnBlock");
   return true;
 }
 
@@ -350,7 +358,8 @@ bool AMDGPUUnifyDivergentExitNodes::runOnFunction(Function &F) {
     DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   const auto &PDT =
       getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
-  const auto &UA = getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
+  UniformityInfo &UA =
+      getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
   const auto *TranformInfo =
       &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
   return AMDGPUUnifyDivergentExitNodesImpl(TranformInfo).run(F, DT, PDT, UA);
@@ -364,9 +373,11 @@ AMDGPUUnifyDivergentExitNodesPass::run(Function &F,
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
 
   const auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
-  const auto &UA = AM.getResult<UniformityInfoAnalysis>(F);
+  UniformityInfo &UA = AM.getResult<UniformityInfoAnalysis>(F);
   const auto *TransformInfo = &AM.getResult<TargetIRAnalysis>(F);
-  return AMDGPUUnifyDivergentExitNodesImpl(TransformInfo).run(F, DT, PDT, UA)
-             ? PreservedAnalyses::none()
-             : PreservedAnalyses::all();
+  if (AMDGPUUnifyDivergentExitNodesImpl(TransformInfo).run(F, DT, PDT, UA))
+    return PreservedAnalyses::none();
+  PreservedAnalyses PA = PreservedAnalyses::all();
+  PA.abandon<UniformityInfoAnalysis>();
+  return PA;
 }

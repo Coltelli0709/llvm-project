@@ -225,7 +225,8 @@ bool AMDGPULateCodeGenPrepare::run() {
       Changed |= LRO.optimizeLiveType(&I, DeadInsts);
     }
 
-  RecursivelyDeleteTriviallyDeadInstructionsPermissive(DeadInsts);
+  RecursivelyDeleteTriviallyDeadInstructionsPermissive(
+      DeadInsts, nullptr, nullptr, [&](Value *V) { UA.eraseValue(V); });
   return Changed;
 }
 
@@ -559,8 +560,11 @@ AMDGPULateCodeGenPreparePass::run(Function &F, FunctionAnalysisManager &FAM) {
 
   bool Changed = AMDGPULateCodeGenPrepare(F, ST, &AC, UI).run();
 
-  if (!Changed)
-    return PreservedAnalyses::all();
+  if (!Changed) {
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    PA.abandon<UniformityInfoAnalysis>();
+    return PA;
+  }
   PreservedAnalyses PA = PreservedAnalyses::none();
   PA.preserveSet<CFGAnalyses>();
   return PA;

@@ -92,8 +92,11 @@ AMDGPUAnnotateUniformValuesPass::run(Function &F,
   AMDGPUAnnotateUniformValues Impl(UI, MSSA, AA, F);
   Impl.visit(F);
 
-  if (!Impl.changed())
-    return PreservedAnalyses::all();
+  if (!Impl.changed()) {
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    PA.abandon<UniformityInfoAnalysis>();
+    return PA;
+  }
 
   PreservedAnalyses PA = PreservedAnalyses::none();
   // TODO: Should preserve nearly everything

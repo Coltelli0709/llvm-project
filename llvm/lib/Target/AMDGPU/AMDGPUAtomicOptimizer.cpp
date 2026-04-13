@@ -68,7 +68,7 @@ class AMDGPUAtomicOptimizerImpl
 private:
   Function &F;
   SmallVector<ReplacementInfo, 8> ToReplace;
-  const UniformityInfo &UA;
+  UniformityInfo &UA;
   const DataLayout &DL;
   DomTreeUpdater &DTU;
   const GCNSubtarget &ST;
@@ -92,7 +92,7 @@ private:
 public:
   AMDGPUAtomicOptimizerImpl() = delete;
 
-  AMDGPUAtomicOptimizerImpl(Function &F, const UniformityInfo &UA,
+  AMDGPUAtomicOptimizerImpl(Function &F, UniformityInfo &UA,
                             DomTreeUpdater &DTU, const GCNSubtarget &ST,
                             ScanOptions ScanImpl)
       : F(F), UA(UA), DL(F.getDataLayout()), DTU(DTU), ST(ST),
@@ -116,7 +116,7 @@ bool AMDGPUAtomicOptimizer::runOnFunction(Function &F) {
     return false;
   }
 
-  const UniformityInfo &UA =
+  UniformityInfo &UA =
       getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
 
   DominatorTreeWrapperPass *DTW =
@@ -133,7 +133,7 @@ bool AMDGPUAtomicOptimizer::runOnFunction(Function &F) {
 
 PreservedAnalyses AMDGPUAtomicOptimizerPass::run(Function &F,
                                                  FunctionAnalysisManager &AM) {
-  const auto &UA = AM.getResult<UniformityInfoAnalysis>(F);
+  UniformityInfo &UA = AM.getResult<UniformityInfoAnalysis>(F);
 
   DomTreeUpdater DTU(&AM.getResult<DominatorTreeAnalysis>(F),
                      DomTreeUpdater::UpdateStrategy::Lazy);
@@ -142,7 +142,9 @@ PreservedAnalyses AMDGPUAtomicOptimizerPass::run(Function &F,
   bool IsChanged = AMDGPUAtomicOptimizerImpl(F, UA, DTU, ST, ScanImpl).run();
 
   if (!IsChanged) {
-    return PreservedAnalyses::all();
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    PA.abandon<UniformityInfoAnalysis>();
+    return PA;
   }
 
   PreservedAnalyses PA;
@@ -972,7 +974,7 @@ void AMDGPUAtomicOptimizerImpl::optimizeAtomic(Instruction &I,
     }
   }
 
-  // And delete the original.
+  UA.eraseValue(&I);
   I.eraseFromParent();
 }
 

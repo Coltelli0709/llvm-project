@@ -176,6 +176,7 @@ bool SIAnnotateControlFlow::hasKill(const BasicBlock *BB) {
 
 // Erase "Phi" if it is not used any more. Return true if any change was made.
 bool SIAnnotateControlFlow::eraseIfUnused(PHINode *Phi) {
+  UA->eraseValue(Phi);
   bool Changed = RecursivelyDeleteDeadPHINode(Phi);
   if (Changed)
     LLVM_DEBUG(dbgs() << "Erased unused condition phi\n");
@@ -398,8 +399,11 @@ PreservedAnalyses SIAnnotateControlFlowPass::run(Function &F,
   SIAnnotateControlFlow Impl(F, ST, DT, LI, UI);
 
   bool Changed = Impl.run();
-  if (!Changed)
-    return PreservedAnalyses::all();
+  if (!Changed) {
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    PA.abandon<UniformityInfoAnalysis>();
+    return PA;
+  }
 
   // TODO: Is LoopInfo preserved?
   PreservedAnalyses PA = PreservedAnalyses::none();
