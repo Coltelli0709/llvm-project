@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/GenericSSAContext.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/ValueHandle.h"
 
 namespace llvm {
 class BasicBlock;
@@ -35,6 +36,7 @@ template <> struct GenericSSATraits<Function> {
   using ValueRefT = Value *;
   using ConstValueRefT = const Value *;
   using UseT = Use;
+  using UniformSetKeyT = AssertingVH<const Value>;
 };
 
 using SSAContext = GenericSSAContext<Function>;

@@ -33,6 +33,7 @@ template <> struct GenericSSATraits<MachineFunction> {
   using ValueRefT = Register;
   using ConstValueRefT = Register;
   using UseT = MachineOperand;
+  using UniformSetKeyT = Register;
 };
 
 using MachineSSAContext = GenericSSAContext<MachineFunction>;

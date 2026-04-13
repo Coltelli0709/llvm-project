@@ -52,7 +52,6 @@ public:
   void compute() {
     DA->initialize();
     DA->compute();
-    DA->registerCallbacks();
   }
 
   /// The GPU kernel this analysis result is for
@@ -76,6 +75,10 @@ public:
   bool isDivergentUse(const UseT &U) const;
 
   bool hasDivergentTerminator(const BlockT &B);
+
+  /// \brief Remove \p V from the analysis. Must be called before deleting
+  /// a value that was present during analysis to prevent stale pointers.
+  void eraseValue(ConstValueRefT V);
 
   void print(raw_ostream &Out) const;
 

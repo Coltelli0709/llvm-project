@@ -57,12 +57,6 @@
 
 namespace llvm {
 
-/// Interface for keeping UniformValues in sync when IR values are deleted.
-/// IR specialization installs a concrete CallbackVH-based implementation.
-struct UniformValueCallbackManager {
-  virtual ~UniformValueCallbackManager() = default;
-};
-
 // Forward decl from llvm/CodeGen/MachineInstr.h
 class MachineInstr;
 
@@ -382,9 +376,9 @@ public:
   /// Divergence is seeded by calls to \p markDivergent.
   void compute();
 
-  /// \brief Register callbacks (e.g., CallbackVH for IR) to keep
-  /// UniformValues in sync when values are deleted after analysis.
-  void registerCallbacks();
+  /// \brief Remove \p V from UniformValues. Must be called before deleting
+  /// a value that was present during analysis to prevent stale pointers.
+  void eraseValue(ConstValueRefT V) { UniformValues.erase(V); }
 
   /// \brief Whether \p Val will always return a uniform value regardless of its
   /// operands
@@ -455,11 +449,7 @@ protected:
   // Values known to be uniform. Populated in initialize() with all values,
   // then values are removed as divergence is propagated. After analysis,
   // values not in this set are conservatively treated as divergent.
-  DenseSet<ConstValueRefT> UniformValues;
-
-  // For IR: callbacks to remove from UniformValues on value deletion,
-  // avoiding stale pointers when addresses are reused.
-  std::unique_ptr<UniformValueCallbackManager> UniformValueCallbacks;
+  DenseSet<typename ContextT::UniformSetKeyT> UniformValues;
 
   // Internal worklist for divergence propagation.
   std::vector<const InstructionT *> Worklist;
@@ -1323,6 +1313,12 @@ bool GenericUniformityInfo<ContextT>::isDivergentUse(const UseT &U) const {
 template <typename ContextT>
 bool GenericUniformityInfo<ContextT>::hasDivergentTerminator(const BlockT &B) {
   return DA && DA->hasDivergentTerminator(B);
+}
+
+template <typename ContextT>
+void GenericUniformityInfo<ContextT>::eraseValue(ConstValueRefT V) {
+  if (DA)
+    DA->eraseValue(V);
 }
 
 /// \brief T helper function for printing.

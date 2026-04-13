@@ -94,10 +94,10 @@ TEST(UniformityAnalysis, NewValueIsConservativelyDivergent) {
       << "New instruction created after analysis must be reported divergent";
 }
 
-TEST(UniformityAnalysis, DeletionCallbackMakesNewInstDivergent) {
-  // Delete a uniform instruction. CallbackVH::deleted() removes it from
-  // UniformValues during eraseFromParent(). A newly created instruction is
-  // not in UniformValues and must be conservatively reported as divergent.
+TEST(UniformityAnalysis, EraseValueBeforeDeletion) {
+  // Passes must call eraseValue() before deleting a value that was present
+  // during analysis. After deletion, a newly created instruction is not in
+  // UniformValues and must be conservatively reported as divergent.
   LLVMInitializeAMDGPUTargetInfo();
   LLVMInitializeAMDGPUTarget();
   LLVMInitializeAMDGPUTargetMC();
@@ -128,6 +128,7 @@ TEST(UniformityAnalysis, DeletionCallbackMakesNewInstDivergent) {
   ASSERT_TRUE(isa<BinaryOperator>(AddInst));
   EXPECT_FALSE(UI.isDivergent(AddInst)) << "%add should be uniform";
 
+  UI.eraseValue(AddInst);
   AddInst->eraseFromParent();
 
   IRBuilder<> Builder(&F->getEntryBlock(), F->getEntryBlock().begin());

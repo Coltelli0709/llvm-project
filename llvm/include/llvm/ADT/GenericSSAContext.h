@@ -63,6 +63,11 @@ public:
   // instruction.
   using UseT = typename SSATraits::UseT;
 
+  // The key type for the DenseSet tracking uniform values. For IR this is
+  // AssertingVH<const Value> to catch forgotten eraseValue() calls in debug
+  // builds; for MIR it is Register.
+  using UniformSetKeyT = typename SSATraits::UniformSetKeyT;
+
   // A BlockT is a sequence of InstructionT, and forms a node of the CFG. It
   // has global methods predecessors() and successors() that return
   // the list of incoming CFG edges and outgoing CFG edges
