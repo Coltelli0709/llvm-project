@@ -787,9 +787,7 @@ void AMDGPUSwLowerLDS::lowerKernelLDSAccesses(Function *Func,
   // block (WIdBlock) so they remain static allocas. Splice the leading cluster
   // in bulk, then move any stragglers that are interleaved with other
   // instructions.
-  auto SplitIt = PrevEntryBlock->begin();
-  while (SplitIt != PrevEntryBlock->end() && isa<AllocaInst>(&*SplitIt))
-    ++SplitIt;
+  auto SplitIt = PrevEntryBlock->getFirstNonPHIOrDbgOrAlloca();
   WIdBlock->splice(WIdBlock->end(), PrevEntryBlock, PrevEntryBlock->begin(),
                    SplitIt);
   for (Instruction &I : make_early_inc_range(*PrevEntryBlock))
