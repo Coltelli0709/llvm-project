@@ -70,3 +70,43 @@ entry:
   store <4 x float> %trunc, ptr %res
   ret void
 }
+
+define void @fptrunc_concat_bitcast(ptr %res, ptr %a0) nounwind {
+; CHECK-LABEL: fptrunc_concat_bitcast:
+; CHECK:       # %bb.0: # %entry
+; CHECK-NEXT:    vld $vr0, $a1, 0
+; CHECK-NEXT:    vld $vr1, $a1, 16
+; CHECK-NEXT:    vreplvei.d $vr2, $vr0, 0
+; CHECK-NEXT:    fcvt.s.d $fa2, $fa2
+; CHECK-NEXT:    vreplvei.d $vr0, $vr0, 1
+; CHECK-NEXT:    fcvt.s.d $fa0, $fa0
+; CHECK-NEXT:    vreplvei.d $vr3, $vr1, 1
+; CHECK-NEXT:    fcvt.s.d $fa3, $fa3
+; CHECK-NEXT:    vreplvei.d $vr1, $vr1, 0
+; CHECK-NEXT:    fcvt.s.d $fa1, $fa1
+; CHECK-NEXT:    vextrins.w $vr2, $vr0, 16
+; CHECK-NEXT:    vextrins.w $vr2, $vr1, 32
+; CHECK-NEXT:    vextrins.w $vr2, $vr3, 48
+; CHECK-NEXT:    vst $vr2, $a0, 0
+; CHECK-NEXT:    ret
+entry:
+  %x = load <4 x double>, ptr %a0
+
+  ; split to 2 x <2 x double>
+  %lo = shufflevector <4 x double> %x, <4 x double> poison,
+                    <2 x i32> <i32 0, i32 1>
+  %hi = shufflevector <4 x double> %x, <4 x double> poison,
+                    <2 x i32> <i32 2, i32 3>
+
+  %r0 = fptrunc <2 x double> %lo to <2 x float>
+  %r1 = fptrunc <2 x double> %hi to <2 x float>
+
+  %i0 = bitcast <2 x float> %r0 to i64
+  %i1 = bitcast <2 x float> %r1 to i64
+
+  ; concat as integer vector
+  %cat0 = insertelement <2 x i64> poison, i64 %i0, i32 0
+  %cat1 = insertelement <2 x i64> %cat0, i64 %i1, i32 1
+  store <2 x i64> %cat1, ptr %res
+  ret void
+}

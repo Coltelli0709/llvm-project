@@ -63,3 +63,55 @@ entry:
   store <8 x float> %trunc, ptr %res
   ret void
 }
+
+define void @fptrunc_concat_bitcast(ptr %res, ptr %a0) nounwind {
+; CHECK-LABEL: fptrunc_concat_bitcast:
+; CHECK:       # %bb.0: # %entry
+; CHECK-NEXT:    xvld $xr0, $a1, 0
+; CHECK-NEXT:    xvld $xr1, $a1, 32
+; CHECK-NEXT:    xvpickve.d $xr2, $xr0, 1
+; CHECK-NEXT:    fcvt.s.d $fa2, $fa2
+; CHECK-NEXT:    xvpickve.d $xr3, $xr0, 0
+; CHECK-NEXT:    fcvt.s.d $fa3, $fa3
+; CHECK-NEXT:    vextrins.w $vr3, $vr2, 16
+; CHECK-NEXT:    xvpickve.d $xr2, $xr0, 2
+; CHECK-NEXT:    fcvt.s.d $fa2, $fa2
+; CHECK-NEXT:    vextrins.w $vr3, $vr2, 32
+; CHECK-NEXT:    xvpickve.d $xr0, $xr0, 3
+; CHECK-NEXT:    fcvt.s.d $fa0, $fa0
+; CHECK-NEXT:    vextrins.w $vr3, $vr0, 48
+; CHECK-NEXT:    xvpickve.d $xr0, $xr1, 1
+; CHECK-NEXT:    fcvt.s.d $fa0, $fa0
+; CHECK-NEXT:    xvpickve.d $xr2, $xr1, 0
+; CHECK-NEXT:    fcvt.s.d $fa2, $fa2
+; CHECK-NEXT:    vextrins.w $vr2, $vr0, 16
+; CHECK-NEXT:    xvpickve.d $xr0, $xr1, 2
+; CHECK-NEXT:    fcvt.s.d $fa0, $fa0
+; CHECK-NEXT:    vextrins.w $vr2, $vr0, 32
+; CHECK-NEXT:    xvpickve.d $xr0, $xr1, 3
+; CHECK-NEXT:    fcvt.s.d $fa0, $fa0
+; CHECK-NEXT:    vextrins.w $vr2, $vr0, 48
+; CHECK-NEXT:    xvpermi.q $xr3, $xr2, 2
+; CHECK-NEXT:    xvst $xr3, $a0, 0
+; CHECK-NEXT:    ret
+entry:
+  %x = load <8 x double>, ptr %a0
+
+  ; split to 2 x <4 x double>
+  %lo = shufflevector <8 x double> %x, <8 x double> poison,
+                    <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+  %hi = shufflevector <8 x double> %x, <8 x double> poison,
+                    <4 x i32> <i32 4, i32 5, i32 6, i32 7>
+
+  %r0 = fptrunc <4 x double> %lo to <4 x float>
+  %r1 = fptrunc <4 x double> %hi to <4 x float>
+
+  %i0 = bitcast <4 x float> %r0 to <2 x i64>
+  %i1 = bitcast <4 x float> %r1 to <2 x i64>
+
+  ; concat as integer vector
+  %cat = shufflevector <2 x i64> %i0, <2 x i64> %i1,
+                     <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+  store <4 x i64> %cat, ptr %res
+  ret void
+}
