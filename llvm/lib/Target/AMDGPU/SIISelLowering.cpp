@@ -6367,8 +6367,10 @@ static MachineBasicBlock *lowerWaveReduce(MachineInstr &MI,
               MachineOperand::CreateReg(Src0, /*isDef=*/false);
           MachineOperand Src1Operand =
               MachineOperand::CreateReg(Src1, /*isDef=*/false);
-          auto [Src0Lo, Src0Hi] = ExtractSubRegs(MI, Src0Operand, SrcRegClass);
-          auto [Src1Lo, Src1Hi] = ExtractSubRegs(MI, Src1Operand, SrcRegClass);
+          auto [Src0Lo, Src0Hi] =
+              ExtractSubRegs(MI, Src0Operand, SrcRegClass, ST, MRI);
+          auto [Src1Lo, Src1Hi] =
+              ExtractSubRegs(MI, Src1Operand, SrcRegClass, ST, MRI);
           Register CarryReg = BuildClampInstr(
               ResLo, Src0Lo, Src1Lo, isAddSubOpc, /*needsCarryIn*/ false);
           BuildClampInstr(ResHi, Src0Hi, Src1Hi, isAddSubOpc,
