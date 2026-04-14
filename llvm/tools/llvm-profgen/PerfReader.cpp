@@ -61,16 +61,8 @@ static cl::opt<int> CSProfMaxUnsymbolizedCtxDepth(
              "means no depth limit."),
     cl::cat(ProfGenCategory));
 
-static cl::opt<std::string> FilterBuildID(
-    "filter-build-id",
-    cl::desc("Override auto-detected build ID for filtering perfscript "
-             "addresses in [buildid:]addr format. When set, only addresses "
-             "with a matching build ID prefix are kept."),
-    cl::cat(ProfGenCategory));
-
-cl::opt<bool> TimeProfGen("time-profgen",
-                         cl::desc("Time llvm-profgen phases"), cl::init(false),
-                         cl::cat(ProfGenCategory));
+cl::opt<bool> TimeProfGen("time-profgen", cl::desc("Time llvm-profgen phases"),
+                          cl::init(false), cl::cat(ProfGenCategory));
 
 static const char *TimerGroupName = "profgen";
 static const char *TimerGroupDesc = "llvm-profgen";
@@ -141,14 +133,33 @@ void VirtualUnwinder::unwindLinear(UnwindState &State, uint64_t Repeat) {
     // converted to a list of pseudo probes to report in ProfileGenerator.
     State.getParentFrame()->recordRangeCount(Target, End, Repeat);
   } else {
-    // Use cached range splits to avoid per-instruction inline context checks.
-    const auto &Splits = Binary->getRangeSplits(Target, End);
-    for (const auto &Split : Splits) {
-      State.switchToFrame(Split.Start);
-      State.CurrentLeafFrame->recordRangeCount(Split.Start, Split.End, Repeat);
+    // Unwind linear execution part.
+    // Split and record the range by different inline context. For example:
+    // [0x01] ... main:1          # Target
+    // [0x02] ... main:2
+    // [0x03] ... main:3 @ foo:1
+    // [0x04] ... main:3 @ foo:2
+    // [0x05] ... main:3 @ foo:3
+    // [0x06] ... main:4
+    // [0x07] ... main:5          # End
+    // It will be recorded:
+    // [main:*]         : [0x06, 0x07], [0x01, 0x02]
+    // [main:3 @ foo:*] : [0x03, 0x05]
+    while (IP.Address > Target) {
+      uint64_t PrevIP = IP.Address;
+      IP.backward();
+      // Break into segments for implicit call/return due to inlining
+      bool SameInlinee = Binary->inlineContextEqual(PrevIP, IP.Address);
+      if (!SameInlinee) {
+        State.switchToFrame(PrevIP);
+        State.CurrentLeafFrame->recordRangeCount(PrevIP, End, Repeat);
+        End = IP.Address;
+      }
     }
-    // Update IP to Target for subsequent unwinding.
-    IP.update(Target);
+    assert(IP.Address == Target && "The last one must be the target address.");
+    // Record the remaining range, [0x01, 0x02] in the example
+    State.switchToFrame(IP.Address);
+    State.CurrentLeafFrame->recordRangeCount(IP.Address, End, Repeat);
   }
 }
 
@@ -361,11 +372,9 @@ PerfReaderBase::create(ProfiledBinary *Binary, PerfInputFile &PerfInput,
 
   PerfInput.Content =
       PerfScriptReader::checkPerfScriptType(PerfInput.InputFile);
-  if (PerfInput.Content == PerfContent::LBRStack ||
-      PerfInput.Content == PerfContent::AggLBRStack) {
-    auto *Reader = new HybridPerfReader(Binary, PerfInput.InputFile, PIDFilter);
-    Reader->setIsPreAggregated(PerfInput.Content == PerfContent::AggLBRStack);
-    PerfReader.reset(Reader);
+  if (PerfInput.Content == PerfContent::LBRStack) {
+    PerfReader.reset(
+        new HybridPerfReader(Binary, PerfInput.InputFile, PIDFilter));
   } else if (PerfInput.Content == PerfContent::LBR) {
     PerfReader.reset(new LBRPerfReader(Binary, PerfInput.InputFile, PIDFilter));
   } else {
@@ -609,8 +618,8 @@ static std::string getContextKeyStr(ContextKey *K,
 }
 
 void HybridPerfReader::unwindSamples() {
-  NamedRegionTimer T("unwind", "Unwind samples", TimerGroupName,
-                     TimerGroupDesc, TimeProfGen);
+  NamedRegionTimer T("unwind", "Unwind samples", TimerGroupName, TimerGroupDesc,
+                     TimeProfGen);
   VirtualUnwinder Unwinder(&SampleCounters, Binary);
   for (const auto &Item : AggregatedSamples) {
     const PerfSample *Sample = Item.first.getPtr();
@@ -654,32 +663,6 @@ void HybridPerfReader::unwindSamples() {
                      "frame to match.");
 }
 
-/// Parse a hex address from \p Str. If \p BuildID is non-null, also parse
-/// an optional [buildid:] prefix.
-static bool parseAddress(StringRef Str, uint64_t &Addr, bool HasPrefix = false,
-                         StringRef *BuildID = nullptr) {
-  if (BuildID) {
-    *BuildID = StringRef();
-    size_t ColonPos = Str.find(':');
-    if (ColonPos != StringRef::npos) {
-      *BuildID = Str.substr(0, ColonPos);
-      Str = Str.substr(ColonPos + 1);
-    }
-  }
-  if (Str.consume_front("0x") != HasPrefix)
-    return false;
-  return Str.getAsInteger(16, Addr);
-}
-
-/// Return the build ID to use for filtering perfscript addresses.
-/// If --filter-build-id is specified, use it as an override.
-/// Otherwise, use the auto-detected value from the binary.
-static StringRef getFilterBuildID(const ProfiledBinary *Binary) {
-  if (FilterBuildID.getNumOccurrences() > 0)
-    return FilterBuildID;
-  return Binary->getFilterBuildID();
-}
-
 bool PerfScriptReader::extractLBRStack(TraceStream &TraceIt,
                                        SmallVectorImpl<LBREntry> &LBRStack) {
   // The raw format of LBR stack is like:
@@ -698,7 +681,7 @@ bool PerfScriptReader::extractLBRStack(TraceStream &TraceIt,
   size_t Index = 0;
   uint64_t LeadingAddr;
   if (!Records.empty() && !Records[0].contains('/')) {
-    if (parseAddress(Records[0], LeadingAddr)) {
+    if (Records[0].getAsInteger(16, LeadingAddr)) {
       WarnInvalidLBR(TraceIt);
       TraceIt.advance();
       return false;
@@ -718,14 +701,10 @@ bool PerfScriptReader::extractLBRStack(TraceStream &TraceIt,
     Token.split(Addresses, "/");
     uint64_t Src;
     uint64_t Dst;
-    StringRef SrcBuildID, DstBuildID;
 
     // Stop at broken LBR records.
-    if (Addresses.size() < 2 ||
-        parseAddress(Addresses[0], Src, true,
-                     IsPreAggregated ? &SrcBuildID : nullptr) ||
-        parseAddress(Addresses[1], Dst, true,
-                     IsPreAggregated ? &DstBuildID : nullptr)) {
+    if (Addresses.size() < 2 || Addresses[0].substr(2).getAsInteger(16, Src) ||
+        Addresses[1].substr(2).getAsInteger(16, Dst)) {
       WarnInvalidLBR(TraceIt);
       break;
     }
@@ -735,14 +714,6 @@ bool PerfScriptReader::extractLBRStack(TraceStream &TraceIt,
     Dst = Binary->canonicalizeVirtualAddress(Dst);
     bool SrcIsInternal = Binary->addressIsCode(Src);
     bool DstIsInternal = Binary->addressIsCode(Dst);
-    // For pre-aggregated input, filter by build ID.
-    if (IsPreAggregated) {
-      StringRef BinaryBuildID = getFilterBuildID(Binary);
-      if (!SrcBuildID.empty() && SrcBuildID != BinaryBuildID)
-        SrcIsInternal = false;
-      if (!DstBuildID.empty() && DstBuildID != BinaryBuildID)
-        DstIsInternal = false;
-    }
     if (!SrcIsInternal)
       Src = ExternalAddr;
     if (!DstIsInternal)
@@ -760,18 +731,16 @@ bool PerfScriptReader::extractLBRStack(TraceStream &TraceIt,
 bool PerfScriptReader::extractCallstack(TraceStream &TraceIt,
                                         SmallVectorImpl<uint64_t> &CallStack) {
   // The raw format of call stack is like:
-  //            4005dc               # leaf frame (no buildid)
+  //            4005dc      # leaf frame
   //	          400634
-  //	          deadbeef:400684      # root frame (with buildid prefix)
+  //	          400684      # root frame
   // It's in bottom-up order with each frame in one line.
 
   // Extract stack frames from sample
-  while (!TraceIt.isAtEoF() && !isLBRSample(TraceIt.getCurrentLine(), true)) {
+  while (!TraceIt.isAtEoF() && !TraceIt.getCurrentLine().starts_with(" 0x")) {
     StringRef FrameStr = TraceIt.getCurrentLine().ltrim();
     uint64_t FrameAddr = 0;
-    StringRef FrameBuildID;
-    if (parseAddress(FrameStr, FrameAddr,
-                     IsPreAggregated ? &FrameBuildID : nullptr)) {
+    if (FrameStr.getAsInteger(16, FrameAddr)) {
       // We might parse a non-perf sample line like empty line and comments,
       // skip it
       TraceIt.advance();
@@ -781,12 +750,7 @@ bool PerfScriptReader::extractCallstack(TraceStream &TraceIt,
 
     FrameAddr = Binary->canonicalizeVirtualAddress(FrameAddr);
     // Currently intermixed frame from different binaries is not supported.
-    bool IsExternal = !Binary->addressIsCode(FrameAddr);
-    // For pre-aggregated input, filter by build ID.
-    if (IsPreAggregated && !IsExternal &&
-        FrameBuildID != getFilterBuildID(Binary))
-      IsExternal = true;
-    if (IsExternal) {
+    if (!Binary->addressIsCode(FrameAddr)) {
       if (CallStack.empty())
         NumLeafExternalFrame++;
       // Push a special value(ExternalAddr) for the external frames so that
@@ -821,7 +785,7 @@ bool PerfScriptReader::extractCallstack(TraceStream &TraceIt,
   // Skip other unrelated line, find the next valid LBR line
   // Note that even for empty call stack, we should skip the address at the
   // bottom, otherwise the following pass may generate a truncated callstack
-  while (!TraceIt.isAtEoF() && !isLBRSample(TraceIt.getCurrentLine(), true)) {
+  while (!TraceIt.isAtEoF() && !TraceIt.getCurrentLine().starts_with(" 0x")) {
     TraceIt.advance();
   }
   // Filter out broken stack sample. We may not have complete frame info
@@ -866,14 +830,14 @@ void HybridPerfReader::parseSample(TraceStream &TraceIt, uint64_t Count) {
   // Parsing call stack and populate into PerfSample.CallStack
   if (!extractCallstack(TraceIt, Sample->CallStack)) {
     // Skip the next LBR line matched current call stack
-    if (!TraceIt.isAtEoF() && isLBRSample(TraceIt.getCurrentLine(), true))
+    if (!TraceIt.isAtEoF() && TraceIt.getCurrentLine().starts_with(" 0x"))
       TraceIt.advance();
     return;
   }
 
   warnIfMissingMMap();
 
-  if (!TraceIt.isAtEoF() && isLBRSample(TraceIt.getCurrentLine(), true)) {
+  if (!TraceIt.isAtEoF() && TraceIt.getCurrentLine().starts_with(" 0x")) {
     // Parsing LBR stack and populate into PerfSample.LBRStack
     if (extractLBRStack(TraceIt, Sample->LBRStack)) {
       if (IgnoreStackSamples) {
@@ -1199,22 +1163,16 @@ void PerfScriptReader::parseAndAggregateTrace() {
 // A LBR sample is like:
 // 40062f 0x5c6313f/0x5c63170/P/-/-/0  0x5c630e7/0x5c63130/P/-/-/0 ...
 // A heuristic for fast detection by checking whether a
-// leading "  0x" or " buildid:0x" and the '/' exist.
-bool PerfScriptReader::isLBRSample(StringRef Line, bool CheckLineStart,
-                                   bool IsPreAggregated) {
+// leading "  0x" and the '/' exist.
+bool PerfScriptReader::isLBRSample(StringRef Line) {
   // Skip the leading instruction pointer
   SmallVector<StringRef, 32> Records;
-  if (!CheckLineStart)
-    Line = Line.trim();
-  Line.split(Records, " ", 2, CheckLineStart);
+  Line.trim().split(Records, " ", 2, false);
   if (Records.size() < 2)
     return false;
-  StringRef Token = Records[1];
-  if (!Token.contains('/'))
-    return false;
-  if (Token.starts_with("0x"))
+  if (Records[1].starts_with("0x") && Records[1].contains('/'))
     return true;
-  return IsPreAggregated && Token.contains(":0x");
+  return false;
 }
 
 bool PerfScriptReader::isMMapEvent(StringRef Line) {
@@ -1244,24 +1202,21 @@ PerfContent PerfScriptReader::checkPerfScriptType(StringRef FileName) {
   TraceStream TraceIt(FileName);
   uint64_t FrameAddr = 0;
   while (!TraceIt.isAtEoF()) {
-    // Skip the aggregated count and detect pre-aggregated input.
-    bool HasAggCount = !TraceIt.getCurrentLine().getAsInteger(10, FrameAddr);
-    if (HasAggCount)
+    // Skip the aggregated count
+    if (!TraceIt.getCurrentLine().getAsInteger(10, FrameAddr))
       TraceIt.advance();
 
     // Detect sample with call stack
     int32_t Count = 0;
-    StringRef FrameBuildId;
     while (!TraceIt.isAtEoF() &&
-           !parseAddress(TraceIt.getCurrentLine().ltrim(), FrameAddr,
-                         HasAggCount ? &FrameBuildId : nullptr)) {
+           !TraceIt.getCurrentLine().ltrim().getAsInteger(16, FrameAddr)) {
       Count++;
       TraceIt.advance();
     }
     if (!TraceIt.isAtEoF()) {
-      if (isLBRSample(TraceIt.getCurrentLine(), false, HasAggCount)) {
+      if (isLBRSample(TraceIt.getCurrentLine())) {
         if (Count > 0)
-          return HasAggCount ? PerfContent::AggLBRStack : PerfContent::LBRStack;
+          return PerfContent::LBRStack;
         else
           return PerfContent::LBR;
       }

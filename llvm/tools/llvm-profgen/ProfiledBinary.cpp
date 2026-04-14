@@ -303,54 +303,19 @@ void ProfiledBinary::load() {
   // TODO: decode other sections.
 }
 
-uint64_t ProfiledBinary::getInlineContextId(uint64_t Address) {
-  auto It = AddressToCtxIdMap.find(Address);
-  if (It != AddressToCtxIdMap.end())
-    return It->second;
-
-  const SampleContextFrameVector &Context =
-      getCachedFrameLocationStack(Address);
-  uint64_t Hash = 0;
-  if (Context.size() > 1) {
-    // Hash all frames except the leaf
-    for (size_t I = 0; I < Context.size() - 1; I++)
-      Hash = hash_combine(Hash, Context[I].getHashCode());
-  }
-  // Also encode the context depth to distinguish empty from single-frame
-  Hash = hash_combine(Hash, Context.size());
-  AddressToCtxIdMap[Address] = Hash;
-  return Hash;
-}
-
 bool ProfiledBinary::inlineContextEqual(uint64_t Address1, uint64_t Address2) {
-  return getInlineContextId(Address1) == getInlineContextId(Address2);
-}
-
-const SmallVector<ProfiledBinary::RangeSplit, 4> &
-ProfiledBinary::getRangeSplits(uint64_t Target, uint64_t End) {
-  auto Key = std::make_pair(Target, End);
-  auto It = RangeSplitCache.find(Key);
-  if (It != RangeSplitCache.end())
-    return It->second;
-
-  // Walk backward from End to Target, splitting at inline context boundaries.
-  // Produces sub-ranges in backward order (matching unwindLinear's walk).
-  SmallVector<RangeSplit, 4> Splits;
-  InstructionPointer IP(this, End);
-  uint64_t RangeEnd = End;
-  while (IP.Address > Target) {
-    uint64_t PrevIP = IP.Address;
-    IP.backward();
-    if (!inlineContextEqual(PrevIP, IP.Address)) {
-      Splits.push_back({PrevIP, RangeEnd});
-      RangeEnd = IP.Address;
-    }
-  }
-  // Final sub-range from Target to the remaining RangeEnd.
-  Splits.push_back({Target, RangeEnd});
-
-  auto Ret = RangeSplitCache.emplace(Key, std::move(Splits));
-  return Ret.first->second;
+  const SampleContextFrameVector &Context1 =
+      getCachedFrameLocationStack(Address1);
+  const SampleContextFrameVector &Context2 =
+      getCachedFrameLocationStack(Address2);
+  if (Context1.size() != Context2.size())
+    return false;
+  if (Context1.empty())
+    return false;
+  // The leaf frame contains location within the leaf, and it
+  // needs to be remove that as it's not part of the calling context
+  return std::equal(Context1.begin(), Context1.begin() + Context1.size() - 1,
+                    Context2.begin(), Context2.begin() + Context2.size() - 1);
 }
 
 SampleContextFrameVector

@@ -783,30 +783,19 @@ void DataAggregator::processProfile(BinaryContext &BC) {
 
 BinaryFunction *
 DataAggregator::getBinaryFunctionContainingAddress(uint64_t Address) const {
-  auto It = AddrToFuncCache.find(Address);
-  if (It != AddrToFuncCache.end())
-    return It->second;
+  if (!BC->containsAddress(Address))
+    return nullptr;
 
-  BinaryFunction *Func = nullptr;
-  if (BC->containsAddress(Address))
-    Func = BC->getBinaryFunctionContainingAddress(
-        Address, /*CheckPastEnd=*/false, /*UseMaxSize=*/true);
-  AddrToFuncCache[Address] = Func;
-  return Func;
+  return BC->getBinaryFunctionContainingAddress(Address, /*CheckPastEnd=*/false,
+                                                /*UseMaxSize=*/true);
 }
 
 BinaryFunction *
 DataAggregator::getBATParentFunction(const BinaryFunction &Func) const {
-  auto It = BATParentCache.find(&Func);
-  if (It != BATParentCache.end())
-    return It->second;
-
-  BinaryFunction *Parent = nullptr;
   if (BAT)
     if (const uint64_t HotAddr = BAT->fetchParentAddress(Func.getAddress()))
-      Parent = getBinaryFunctionContainingAddress(HotAddr);
-  BATParentCache[&Func] = Parent;
-  return Parent;
+      return getBinaryFunctionContainingAddress(HotAddr);
+  return nullptr;
 }
 
 StringRef DataAggregator::getLocationName(const BinaryFunction &Func,

@@ -502,8 +502,8 @@ ProfileGenerator::getTopLevelFunctionProfile(FunctionId FuncName) {
 }
 
 void ProfileGenerator::generateProfile() {
-  NamedRegionTimer T("generate", "Generate profile", "profgen",
-                     "llvm-profgen", TimeProfGen);
+  NamedRegionTimer T("generate", "Generate profile", "profgen", "llvm-profgen",
+                     TimeProfGen);
   collectProfiledFunctions();
 
   if (Binary->usePseudoProbes()) {
