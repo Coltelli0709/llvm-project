@@ -143,11 +143,6 @@ private:
   /// Pre-populated addresses of returns, coming from pre-aggregated data or
   /// disassembly. Used to disambiguate call-continuation fall-throughs.
   std::unordered_map<uint64_t, bool> Returns;
-  /// Cached address-to-function lookups to avoid repeated O(log N) map searches.
-  mutable std::unordered_map<uint64_t, BinaryFunction *> AddrToFuncCache;
-  /// Cached BAT parent function lookups.
-  mutable std::unordered_map<const BinaryFunction *, BinaryFunction *>
-      BATParentCache;
   std::unordered_map<uint64_t, uint64_t> BasicSamples;
   std::vector<PerfMemSample> MemSamples;
 
