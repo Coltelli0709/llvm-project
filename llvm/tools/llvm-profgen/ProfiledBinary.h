@@ -269,6 +269,22 @@ class ProfiledBinary {
   // Address to context location map. Used to expand the context.
   std::unordered_map<uint64_t, SampleContextFrameVector> AddressToLocStackMap;
 
+  // Address to inline context ID map. Used by inlineContextEqual for fast
+  // comparison. The ID uniquely identifies the inline context (all frames
+  // except leaf) at a given address.
+  std::unordered_map<uint64_t, uint64_t> AddressToCtxIdMap;
+
+  // Cache of range splits by inline context boundaries.
+  // Key: (Target, End) range. Value: list of sub-ranges split at inline
+  // context boundaries, ordered from End backward to Target.
+  struct RangeSplit {
+    uint64_t Start;
+    uint64_t End;
+  };
+  std::unordered_map<std::pair<uint64_t, uint64_t>,
+                     SmallVector<RangeSplit, 4>,
+                     pair_hash<uint64_t, uint64_t>> RangeSplitCache;
+
   // Address to instruction size map. Also used for quick Address lookup.
   std::unordered_map<uint64_t, uint64_t> AddressToInstSizeMap;
 
@@ -623,6 +639,15 @@ public:
 
   // Compare two addresses' inline context
   bool inlineContextEqual(uint64_t Add1, uint64_t Add2);
+
+  // Get a unique ID for the inline context (all frames except leaf) at Address.
+  uint64_t getInlineContextId(uint64_t Address);
+
+  // Get cached range splits for [Target, End]. Returns sub-ranges split at
+  // inline context boundaries, ordered from End backward to Target (matching
+  // the backward walk in unwindLinear).
+  const SmallVector<RangeSplit, 4> &getRangeSplits(uint64_t Target,
+                                                   uint64_t End);
 
   // Get the full context of the current stack with inline context filled in.
   // It will search the disassembling info stored in AddressToLocStackMap. This

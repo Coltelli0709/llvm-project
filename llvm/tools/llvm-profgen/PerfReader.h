@@ -69,8 +69,9 @@ enum PerfFormat {
 // The type of perfscript content.
 enum PerfContent {
   UnknownContent = 0,
-  LBR = 1,      // Only LBR sample.
-  LBRStack = 2, // Hybrid sample including call stack and LBR stack.
+  LBR = 1,         // Only LBR sample.
+  LBRStack = 2,    // Hybrid sample including call stack and LBR stack.
+  AggLBRStack = 3, // Pre-aggregated hybrid sample.
 };
 
 struct PerfInputFile {
@@ -151,9 +152,12 @@ struct PerfSample {
   // Call stack recorded in FILO(leaf to root) order, it's used for CS-profile
   // generation
   SmallVector<uint64_t, 16> CallStack;
+  mutable uint64_t CachedHash = 0;
 
   virtual ~PerfSample() = default;
   uint64_t getHashCode() const {
+    if (CachedHash)
+      return CachedHash;
     // Use simple DJB2 hash
     auto HashCombine = [](uint64_t H, uint64_t V) {
       return ((H << 5) + H) + V;
@@ -166,6 +170,7 @@ struct PerfSample {
       Hash = HashCombine(Hash, Entry.Source);
       Hash = HashCombine(Hash, Entry.Target);
     }
+    CachedHash = Hash;
     return Hash;
   }
 
@@ -631,9 +636,12 @@ public:
   // receiving signals.
   static SmallVector<CleanupInstaller, 2> TempFileCleanups;
 
+  void setIsPreAggregated(bool V) { IsPreAggregated = V; }
+
 protected:
   // Check whether a given line is LBR sample
-  static bool isLBRSample(StringRef Line);
+  static bool isLBRSample(StringRef Line, bool CheckLineStart,
+                          bool IsPreAggregated);
   // Check whether a given line is MMAP event
   static bool isMMapEvent(StringRef Line);
   // Update base address based on mmap events
@@ -676,6 +684,8 @@ protected:
   std::set<uint64_t> InvalidReturnAddresses;
   // PID for the process of interest
   std::optional<int32_t> PIDFilter;
+  // Whether the input is pre-aggregated with [buildid:]addr format.
+  bool IsPreAggregated = false;
 };
 
 /*
