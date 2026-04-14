@@ -1929,8 +1929,7 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
     builder.createStore(loc, gpuBinaryHandle, gpuBinaryHandleGlobal);
 
     // --- Generate __cuda_register_globals and call it ---
-    std::optional<FuncOp> regGlobal = buildCUDARegisterGlobals();
-    if (regGlobal) {
+    if (std::optional<FuncOp> regGlobal = buildCUDARegisterGlobals()) {
       builder.createCallOp(loc, *regGlobal, gpuBinaryHandle);
     }
 
